@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>注入测试数据 - LISTING FORGE</title>
+<style>
+  body { font-family: 'Noto Sans SC', system-ui, sans-serif; background: #EAE5D7; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+  .box { border: 2px solid #0F0F0F; background: #fff; padding: 40px; max-width: 500px; text-align: center; box-shadow: 4px 4px 0 #0F0F0F; }
+  h1 { font-size: 20px; margin: 0 0 16px; }
+  p { color: #666; font-size: 14px; line-height: 1.6; }
+  .btn { display: inline-block; background: #FF6B35; color: #fff; border: 2px solid #FF6B35; padding: 12px 32px; font-size: 14px; font-weight: bold; cursor: pointer; text-decoration: none; margin-top: 16px; }
+  .btn:hover { background: #e55a2b; }
+  .status { margin-top: 16px; font-size: 13px; color: #666; }
+  .ok { color: #2d8a3e; font-weight: bold; }
+</style>
+</head>
+<body>
+<div class="box">
+  <h1>历史记录测试数据注入</h1>
+  <p>点击下方按钮，将向浏览器 localStorage 注入 2 条模拟历史记录，然后自动跳转到应用主页。</p>
+  <button class="btn" onclick="doInject()">注入测试数据并跳转</button>
+  <button class="btn" style="background:#0F0F0F;border-color:#0F0F0F;" onclick="doClear()">清除测试数据</button>
+  <div class="status" id="status"></div>
+</div>
+<script>
+function doInject() {
+  var STORAGE_KEY = 'zewphoto-store';
+  var now = Date.now();
+  var day = 86400000, hour = 3600000;
+
+  var templates = [
+    { productInfo: { productLine: 2, productCode: 'XS0607-121', styleCode: 'XS0607', productName: '桃皮绒枕套', costPrice: '15.5', weight: '90', packageLength: '30', packageWidth: '20', packageHeight: '5', competitorTitle: 'Peach Skin Pillowcase Soft', keywords: 'Peach Skin Pillowcase', relatedLink: 'https://www.amazon.com/dp/B08XYZ123', material: '涤纶', category: '保护罩', theme: '', mainColor: '粉色', englishAttribute: '1 PC Peach Skin Pillowcase' }, fileCount: { folder1200: 12, folder1688: 4, videos: 1, ozonFiles: 0 }, fillTables: true, status: 'completed' },
+    { productInfo: { productLine: 1, productCode: 'XS7046-101', styleCode: 'XS7046', productName: '圣诞门帘', costPrice: '22.0', weight: '180', packageLength: '50', packageWidth: '40', packageHeight: '8', competitorTitle: 'Christmas Door Curtain', keywords: 'Christmas Curtain', relatedLink: 'https://www.amazon.com/dp/B08ABC456', material: '亚麻', category: '门帘', theme: '圣诞', mainColor: '红色', englishAttribute: '1 PC Christmas Door Curtain' }, fileCount: { folder1200: 18, folder1688: 4, videos: 2, ozonFiles: 6 }, fillTables: true, status: 'completed' },
+  ];
+
+  var offsets = [2*hour, 5*hour];
+  var mockHistory = templates.map(function(t, i) {
+    return Object.assign({}, t, { id: 'mock-'+i+'-'+Math.random().toString(36).slice(2,7), timestamp: now - offsets[i] });
+  });
+
+  var stored = {};
+  try { var raw = localStorage.getItem(STORAGE_KEY); if (raw) stored = JSON.parse(raw); } catch(e) {}
+
+  var existing = (stored.state && stored.state.history) || [];
+  var existingIds = {};
+  existing.forEach(function(h) { existingIds[h.id] = true; });
+
+  var merged = mockHistory.filter(function(h) { return !existingIds[h.id]; }).concat(existing).slice(0, 50);
+
+  stored.state = stored.state || {};
+  stored.state.productInfo = stored.state.productInfo || { productLine: 2, productCode: '', styleCode: '', productName: '', costPrice: '', weight: '', packageLength: '', packageWidth: '', packageHeight: '', competitorTitle: '', keywords: '', relatedLink: '', material: '', category: '', theme: '', mainColor: '', englishAttribute: '' };
+  stored.state.history = merged;
+  stored.version = 0;
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+
+  document.getElementById('status').innerHTML = '<span class="ok">✅ 已注入 ' + mockHistory.length + ' 条测试数据，正在跳转...</span>';
+  setTimeout(function() { window.location.href = '/'; }, 800);
+}
+
+function doClear() {
+  var STORAGE_KEY = 'zewphoto-store';
+  var raw = localStorage.getItem(STORAGE_KEY);
+  if (!raw) { document.getElementById('status').innerHTML = '无数据可清除'; return; }
+  var data = JSON.parse(raw);
+  if (data.state && data.state.history) {
+    var before = data.state.history.length;
+    data.state.history = data.state.history.filter(function(h) { return !h.id || !h.id.startsWith('mock-'); });
+    var after = data.state.history.length;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    document.getElementById('status').innerHTML = '<span class="ok">✅ 已清除 ' + (before - after) + ' 条测试数据</span>';
+  }
+}
+</script>
+</body>
+</html>
