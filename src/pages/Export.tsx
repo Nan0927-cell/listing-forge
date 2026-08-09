@@ -43,21 +43,29 @@ export default function ExportPage() {
   const buildExportGroups = (): ExportGroup[] => {
     const groups: ExportGroup[] = [];
 
-    // 组1: 商品编码-S-产品线N
-    const group1Name = `${productCode}-S-${lineLabel}`;
-    const group1Items: ExportItem[] = [
-      { type: 'folder', name: productCode, source: '1688文件夹(配对图+其他图片)', children: get1688Files() },
-      { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
-    ];
-    if (fillTables && tableResults[1]) {
-      group1Items.push({
-        type: 'file' as const,
-        name: `${tableResults[1].name}.xlsx`,
-        source: '表二',
-        blob: new Blob([tableResults[1].buffer]),
-      });
+    // 是否有1688文件夹
+    const has1688 = scanResult.folder1688.length > 0;
+
+    // 组1: 商品编码-S-产品线N (仅当有1688文件夹时生成)
+    if (has1688) {
+      const group1Name = `${productCode}-S-${lineLabel}`;
+      const group1Items: ExportItem[] = [
+        { type: 'folder', name: productCode, source: '1688文件夹(配对图+其他图片)', children: get1688Files() },
+        { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
+      ];
+      if (fillTables && tableResults[1]) {
+        group1Items.push({
+          type: 'file' as const,
+          name: `${tableResults[1].name}.xlsx`,
+          source: '表二',
+          blob: new Blob([tableResults[1].buffer]),
+        });
+      }
+      // 额外空白文件夹
+      group1Items.push({ type: 'folder' as const, name: 'gprs实拍图', source: '空文件夹', children: [] });
+      group1Items.push({ type: 'folder' as const, name: '包装图', source: '空文件夹', children: [] });
+      groups.push({ folderName: group1Name, items: group1Items });
     }
-    groups.push({ folderName: group1Name, items: group1Items });
 
     // 组2: 商品编码-品类-ozon-产品线N (仅当有ozon时)
     if (processResult.ozonRenamed && scanResult.ozonFiles.length > 0) {
@@ -103,6 +111,8 @@ export default function ExportPage() {
         blob: new Blob([tableResults[0].buffer]),
       });
     }
+    // 额外空白文件夹
+    group4Items.push({ type: 'folder' as const, name: '包装图', source: '空文件夹', children: [] });
     groups.push({ folderName: group4Name, items: group4Items });
 
     return groups;
@@ -118,16 +128,22 @@ export default function ExportPage() {
   const get1688Files = () => {
     const files: { name: string; blob: Blob }[] = [];
     // 已配对的图片使用新名称
+    // 命名规则：杜青组方图.jpg / 杜青组方图2.jpg / 陈悦组首图2.jpg ...
+    // 数字放在类型(方图/首图)后面
     const pairedFiles = new Set<string>();
     for (const pair of pairs1688) {
+      // 从组名中提取基础名称和序号，如 "杜青组2" → base="杜青组", num="2"
+      const m = pair.groupName.match(/^(.+组)(\d*)$/);
+      const base = m ? m[1] : pair.groupName;
+      const num = m && m[2] ? m[2] : '';
       if (pair.squareImage) {
         const ext = pair.squareImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        files.push({ name: `${pair.groupName}方图.${ext}`, blob: pair.squareImage.file });
+        files.push({ name: `${base}方图${num}.${ext}`, blob: pair.squareImage.file });
         pairedFiles.add(pair.squareImage.name);
       }
       if (pair.mainImage) {
         const ext = pair.mainImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        files.push({ name: `${pair.groupName}首图.${ext}`, blob: pair.mainImage.file });
+        files.push({ name: `${base}首图${num}.${ext}`, blob: pair.mainImage.file });
         pairedFiles.add(pair.mainImage.name);
       }
     }
@@ -243,7 +259,7 @@ export default function ExportPage() {
         <div className="section-tag mb-2">06 · EXPORT</div>
         <h1 className="text-3xl font-bold tracking-tightest">归类导出</h1>
         <p className="mt-1 text-sm text-ink-500">
-          将处理后的文件按规则归类到四个文件夹，导出到指定位置。
+          将处理后的文件按规则归类到对应文件夹，导出到指定位置。
         </p>
       </div>
 

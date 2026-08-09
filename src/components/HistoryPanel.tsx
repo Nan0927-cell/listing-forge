@@ -1,8 +1,9 @@
+import { useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { cn } from '@/lib/utils';
 import {
   X, History, RotateCcw, Trash2, Clock, Package,
-  CheckCircle2, AlertCircle, FileX,
+  CheckCircle2, AlertCircle, FileX, AlertTriangle,
 } from 'lucide-react';
 import type { ProductInfo } from '@/types';
 
@@ -13,6 +14,7 @@ interface HistoryPanelProps {
 
 export default function HistoryPanel({ open, onClose }: HistoryPanelProps) {
   const { history, removeHistory, clearHistory, setProductInfo } = useStore();
+  const [confirmClear, setConfirmClear] = useState(false);
 
   const handleReuse = (info: ProductInfo) => {
     setProductInfo(info);
@@ -63,7 +65,7 @@ export default function HistoryPanel({ open, onClose }: HistoryPanelProps) {
           <div className="flex items-center gap-2">
             {history.length > 0 && (
               <button
-                onClick={clearHistory}
+                onClick={() => setConfirmClear(true)}
                 className="font-mono text-[10px] uppercase tracking-industrial text-bone/50 hover:text-flame"
               >
                 清空
@@ -170,6 +172,42 @@ export default function HistoryPanel({ open, onClose }: HistoryPanelProps) {
           )}
         </div>
       </div>
+
+      {/* 清空确认弹窗 */}
+      {confirmClear && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+          <div className="w-[360px] max-w-[90vw] border-2 border-ink-900 bg-bone shadow-industrial">
+            <div className="flex items-center gap-2 border-b-2 border-ink-900 bg-ink-900 px-4 py-3 text-bone">
+              <AlertTriangle className="h-4 w-4 text-flame" />
+              <span className="font-mono text-sm font-bold uppercase tracking-industrial">
+                确认清空
+              </span>
+            </div>
+            <div className="p-5">
+              <p className="text-sm text-ink-700">
+                确定要清空所有历史记录吗？此操作不可恢复。
+              </p>
+              <div className="mt-5 flex gap-2">
+                <button
+                  onClick={() => setConfirmClear(false)}
+                  className="flex-1 border-2 border-ink-300 py-2 font-mono text-xs font-bold uppercase tracking-industrial hover:border-ink-500"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={() => {
+                    clearHistory();
+                    setConfirmClear(false);
+                  }}
+                  className="flex-1 border-2 border-rust bg-rust py-2 font-mono text-xs font-bold uppercase tracking-industrial text-bone hover:bg-rust/90"
+                >
+                  确认清空
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

@@ -74,7 +74,7 @@ export default function Layout() {
               </div>
             </div>
             <div className="border border-bone/30 px-2 py-0.5 font-mono text-[10px] text-bone/70">
-              v2.0
+              v3.0
             </div>
           </div>
         </div>

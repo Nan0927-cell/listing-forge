@@ -19,14 +19,14 @@ const FIELDS: PreviewField[] = [
   { label: '成本价', table: '表一/二/三' },
   { label: '重量', table: '表一/三' },
   { label: '包装尺寸', table: '表一/三' },
-  { label: '1档售价 (50%)', table: '表一/二 M2' },
+  { label: '1档售价 (40%)', table: '表一/二 M2' },
   { label: '2档售价 (45%)', table: '表一/二 M3' },
-  { label: '3档售价 (40%)', table: '表一/二 M4' },
+  { label: '3档售价 (50%)', table: '表一/二 M4' },
   { label: '参考标题', table: '全部 A7/A2' },
   { label: '关键词', table: '全部 E7/E2' },
   { label: '相关链接', table: '全部 F7/F2' },
   { label: '商品材质', table: '表一/二 A14, 表三 A9' },
-  { label: '商品品类', table: '表一/二 B15, 表三 B10' },
+  { label: '核心卖点', table: '表一/二 B15, 表三 B10' },
   { label: '主题', table: '表一/二 B16, 表三 B11' },
   { label: '主卖颜色', table: '表一/二 B18, 表三 B13' },
   { label: '英文属性', table: '表三 C2' },
@@ -40,8 +40,8 @@ const COMPUTED_LABELS = new Set([
 
 const isComputed = (label: string) => COMPUTED_LABELS.has(label);
 
-// 售价三档字段标签
-const PRICE_LABELS = ['1档售价 (50%)', '2档售价 (45%)', '3档售价 (40%)'] as const;
+// 售价三档字段标签 (从低到高: 40% / 45% / 50%)
+const PRICE_LABELS = ['1档售价 (40%)', '2档售价 (45%)', '3档售价 (50%)'] as const;
 const isPriceField = (label: string) => (PRICE_LABELS as readonly string[]).includes(label);
 
 // 从 ProductInfo 构建初始可编辑数据（key 为预览字段 label）
@@ -54,14 +54,14 @@ const buildInitialEditable = (
   '成本价': info.costPrice,
   '重量': info.weight,
   '包装尺寸': `${info.packageLength || ''} × ${info.packageWidth || ''} × ${info.packageHeight || ''}`.trim(),
-  '1档售价 (50%)': String(formatPrice(prices.tier1)),
+  '1档售价 (40%)': String(formatPrice(prices.tier3)),
   '2档售价 (45%)': String(formatPrice(prices.tier2)),
-  '3档售价 (40%)': String(formatPrice(prices.tier3)),
+  '3档售价 (50%)': String(formatPrice(prices.tier1)),
   '参考标题': info.competitorTitle,
   '关键词': info.keywords,
   '相关链接': info.relatedLink,
   '商品材质': info.material,
-  '商品品类': info.category,
+  '核心卖点': info.category,
   '主题': info.theme,
   '主卖颜色': info.mainColor,
   '英文属性': info.englishAttribute,
@@ -109,7 +109,7 @@ const toProductInfo = (
     keywords: data['关键词'] ?? info.keywords,
     relatedLink: data['相关链接'] ?? info.relatedLink,
     material: data['商品材质'] ?? info.material,
-    category: data['商品品类'] ?? info.category,
+    category: data['核心卖点'] ?? info.category,
     theme: data['主题'] ?? info.theme,
     mainColor: data['主卖颜色'] ?? info.mainColor,
     englishAttribute: data['英文属性'] ?? info.englishAttribute,
@@ -151,15 +151,15 @@ export default function Tables() {
     const code = editableData['商品编码'] || '';
     setEditableData((prev) => ({
       ...prev,
-      '1档售价 (50%)': manualPriceFlags.has('1档售价 (50%)')
-        ? prev['1档售价 (50%)']
-        : String(formatPrice(livePrices.tier1)),
+      '1档售价 (40%)': manualPriceFlags.has('1档售价 (40%)')
+        ? prev['1档售价 (40%)']
+        : String(formatPrice(livePrices.tier3)),
       '2档售价 (45%)': manualPriceFlags.has('2档售价 (45%)')
         ? prev['2档售价 (45%)']
         : String(formatPrice(livePrices.tier2)),
-      '3档售价 (40%)': manualPriceFlags.has('3档售价 (40%)')
-        ? prev['3档售价 (40%)']
-        : String(formatPrice(livePrices.tier3)),
+      '3档售价 (50%)': manualPriceFlags.has('3档售价 (50%)')
+        ? prev['3档售价 (50%)']
+        : String(formatPrice(livePrices.tier1)),
       '编号文本': `1、${code}-1`,
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -203,14 +203,14 @@ export default function Tables() {
       const tempInfo = toProductInfo(productInfo, editableData);
       // 提取售价覆盖值（仅传递用户手动修改过的）
       const priceOverrides: PriceOverrides = {};
-      if (manualPriceFlags.has('1档售价 (50%)')) {
-        priceOverrides.tier1 = parseFloat(editableData['1档售价 (50%)']) || undefined;
+      if (manualPriceFlags.has('1档售价 (40%)')) {
+        priceOverrides.tier3 = parseFloat(editableData['1档售价 (40%)']) || undefined;
       }
       if (manualPriceFlags.has('2档售价 (45%)')) {
         priceOverrides.tier2 = parseFloat(editableData['2档售价 (45%)']) || undefined;
       }
-      if (manualPriceFlags.has('3档售价 (40%)')) {
-        priceOverrides.tier3 = parseFloat(editableData['3档售价 (40%)']) || undefined;
+      if (manualPriceFlags.has('3档售价 (50%)')) {
+        priceOverrides.tier1 = parseFloat(editableData['3档售价 (50%)']) || undefined;
       }
       const results = await fillAllTables(tempInfo, attrBlob, priceOverrides);
       setTableResults(results);

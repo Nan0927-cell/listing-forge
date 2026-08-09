@@ -122,6 +122,7 @@ export async function resizeTo750(file: File | Blob): Promise<Blob> {
 
 export function autoClassifyImages(
   files: ScannedFile[],
+  styleCode: string,
   productCode: string
 ): ClassifiedImage[] {
   const result: ClassifiedImage[] = [];
@@ -241,7 +242,7 @@ export function autoClassifyImages(
 
     // 保留原扩展名
     const ext = item.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-    const newName = `${productCode}-${padZero(globalOrder)}.${ext}`;
+    const newName = `${styleCode}-00-${padZero(globalOrder)}.${ext}`;
 
     if (!result.find((r) => r.file === item.file)) {
       result.push({

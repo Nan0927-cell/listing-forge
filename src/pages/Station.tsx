@@ -6,6 +6,7 @@ import { isFileSystemAccessSupported, THEME_OPTIONS, cn } from '@/lib/utils';
 import {
   FolderOpen, FolderPlus, Upload, ChevronRight, AlertCircle,
   Package, Ruler, Tag, Link2, Palette, FileText, Boxes, Scan,
+  RotateCcw, AlertTriangle, X,
 } from 'lucide-react';
 
 export default function Station() {
@@ -14,12 +15,21 @@ export default function Station() {
     productInfo, setProductInfo,
     inputDirHandle, inputDirName, setInputDir,
     outputDirHandle, outputDirName, setOutputDir,
-    setScanResult, setStepStatus, setError,
+    setScanResult, setStepStatus, setError, resetAll,
   } = useStore();
 
   const [scanning, setScanning] = useState(false);
   const [dragOver, setDragOver] = useState<'input' | 'output' | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const sectionCRef = useRef<HTMLElement>(null);
+
+  // 一键清除所有已填内容
+  const handleClearAll = () => {
+    resetAll();
+    setShowClearConfirm(false);
+    setError(null);
+  };
 
   const requiredFilled =
     inputDirHandle &&
@@ -101,6 +111,65 @@ export default function Station() {
     }
   };
 
+  // SECTION C 输入框键盘方向键导航（事件代理）
+  // 基于视觉位置的2D网格导航，不受光标在文本中的位置限制
+  const handleFieldKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+
+    const currentInput = e.target as HTMLInputElement;
+    const section = sectionCRef.current;
+    if (!section) return;
+
+    const inputs = Array.from(section.querySelectorAll('input'));
+    if (!inputs.includes(currentInput)) return;
+
+    e.preventDefault();
+
+    const curRect = currentInput.getBoundingClientRect();
+    const curCx = curRect.left + curRect.width / 2;
+    const curCy = curRect.top + curRect.height / 2;
+
+    let bestInput: HTMLInputElement | null = null;
+    let bestScore = Infinity;
+
+    for (const inp of inputs) {
+      if (inp === currentInput) continue;
+      const r = inp.getBoundingClientRect();
+      const cx = r.left + r.width / 2;
+      const cy = r.top + r.height / 2;
+      const dx = cx - curCx;
+      const dy = cy - curCy;
+
+      let valid = false;
+      let score = Infinity;
+
+      switch (e.key) {
+        case 'ArrowLeft':
+          if (dx < -5) { valid = true; score = Math.abs(dy) * 3 + Math.abs(dx); }
+          break;
+        case 'ArrowRight':
+          if (dx > 5) { valid = true; score = Math.abs(dy) * 3 + dx; }
+          break;
+        case 'ArrowUp':
+          if (dy < -5) { valid = true; score = Math.abs(dx) * 3 + Math.abs(dy); }
+          break;
+        case 'ArrowDown':
+          if (dy > 5) { valid = true; score = Math.abs(dx) * 3 + dy; }
+          break;
+      }
+
+      if (valid && score < bestScore) {
+        bestScore = score;
+        bestInput = inp;
+      }
+    }
+
+    if (bestInput) {
+      bestInput.focus();
+      bestInput.select();
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* 页面标题 */}
@@ -112,7 +181,65 @@ export default function Station() {
             输入商品与款式编号，选择输入与输出文件夹，填写产品信息后开始处理流程。
           </p>
         </div>
+        <button
+          onClick={() => setShowClearConfirm(true)}
+          className="btn-outline flex items-center gap-1.5 border-rust/40 text-rust hover:bg-rust hover:text-bone hover:border-rust px-4 py-2 text-sm"
+        >
+          <RotateCcw className="h-4 w-4" />
+          一键清除
+        </button>
       </div>
+
+      {/* 清除确认弹窗 */}
+      {showClearConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-ink-900/50"
+          onClick={() => setShowClearConfirm(false)}
+        >
+          <div
+            className="mx-4 w-full max-w-md border-2 border-ink-900 bg-bone p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-5 w-5 text-rust" />
+                <h3 className="text-lg font-bold">确认清除所有内容？</h3>
+              </div>
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="text-ink-400 hover:text-ink-900"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <p className="mb-6 text-sm text-ink-600">
+              此操作将清除以下所有数据，且不可恢复：
+            </p>
+            <ul className="mb-6 space-y-1 text-sm text-ink-500">
+              <li>· 产品信息（编码、名称、价格、尺寸等）</li>
+              <li>· 输入/输出文件夹选择</li>
+              <li>· 图片扫描与分类结果</li>
+              <li>· 1688配对数据</li>
+              <li>· 处理结果与表格填写数据</li>
+              <li>· 导出结构与步骤状态</li>
+            </ul>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowClearConfirm(false)}
+                className="btn-outline px-5 py-2 text-sm"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleClearAll}
+                className="bg-rust px-5 py-2 text-sm font-bold text-bone transition-colors hover:bg-rust/80"
+              >
+                确认清除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 浏览器兼容性警告 */}
       {!isFileSystemAccessSupported() && (
@@ -275,7 +402,7 @@ export default function Station() {
       </section>
 
       {/* SECTION C: 产品信息 */}
-      <section className="card-industrial p-5">
+      <section ref={sectionCRef} className="card-industrial p-5" onKeyDown={handleFieldKeyDown}>
         <div className="mb-4 flex items-center gap-2">
           <span className="section-tag">SECTION_C</span>
           <h2 className="text-lg font-bold">产品信息</h2>
@@ -393,8 +520,8 @@ export default function Station() {
             />
           </Field>
 
-          {/* 商品品类 */}
-          <Field label="商品品类" icon={<Boxes className="h-3 w-3" />} optional>
+          {/* 核心卖点 */}
+          <Field label="核心卖点" icon={<Boxes className="h-3 w-3" />} optional>
             <input
               type="text"
               value={productInfo.category}

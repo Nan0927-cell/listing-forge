@@ -8,7 +8,7 @@ import ImagePreview from '@/components/ImagePreview';
 import {
   Image as ImageIcon, Folder, Video, FileBox,
   ChevronRight, RefreshCw, GripVertical,
-  CheckSquare, Square, Layers, X,
+  CheckSquare, Square, Layers, X, Trash2,
 } from 'lucide-react';
 
 const CATEGORY_LABELS: Record<ImageCategory, string> = {
@@ -48,10 +48,10 @@ export default function Classify() {
   // 自动分类
   useEffect(() => {
     if (scanResult && scanResult.folder1200.length > 0 && classifiedImages.length === 0) {
-      const classified = autoClassifyImages(scanResult.folder1200, productInfo.productCode);
+      const classified = autoClassifyImages(scanResult.folder1200, productInfo.styleCode, productInfo.productCode);
       setClassifiedImages(classified);
     }
-  }, [scanResult, productInfo.productCode, classifiedImages.length, setClassifiedImages]);
+  }, [scanResult, productInfo.productCode, productInfo.styleCode, classifiedImages.length, setClassifiedImages]);
 
   // 生成缩略图
   useEffect(() => {
@@ -96,7 +96,7 @@ export default function Classify() {
     const updated = [...classifiedImages];
     updated[index] = { ...updated[index], category };
     // 重新生成名称
-    recalculateNames(updated, productInfo.productCode);
+    recalculateNames(updated, productInfo.styleCode);
     setClassifiedImages(updated);
   };
 
@@ -130,7 +130,7 @@ export default function Classify() {
     const updated = classifiedImages.map((img, i) =>
       selectedIndices.has(i) ? { ...img, category } : img
     );
-    recalculateNames(updated, productInfo.productCode);
+    recalculateNames(updated, productInfo.styleCode);
     setClassifiedImages(updated);
     clearSelection();
   };
@@ -164,21 +164,21 @@ export default function Classify() {
     const updated = [...classifiedImages];
     const [draggedItem] = updated.splice(dragIndex, 1);
     updated.splice(index, 0, draggedItem);
-    recalculateNames(updated, productInfo.productCode);
+    recalculateNames(updated, productInfo.styleCode);
     setClassifiedImages(updated);
     setDragIndex(null);
     setDragOverIndex(null);
   };
 
   // 重新计算名称
-  const recalculateNames = (images: ClassifiedImage[], productCode: string) => {
+  const recalculateNames = (images: ClassifiedImage[], styleCode: string) => {
     const order: ImageCategory[] = ['main', 'scene', 'detail-grid', 'detail', 'white-bg'];
     let orderNum = 1;
     for (const cat of order) {
       for (const img of images) {
         if (img.category === cat) {
           const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-          img.newName = `${productCode}-${String(orderNum).padStart(2, '0')}.${ext}`;
+          img.newName = `${styleCode}-00-${String(orderNum).padStart(2, '0')}.${ext}`;
           img.order = orderNum;
           orderNum++;
         }
@@ -188,10 +188,26 @@ export default function Classify() {
     for (const img of images) {
       if (img.category === 'attribute') {
         const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        img.newName = `${productCode}.${ext}`;
+        img.newName = `${productInfo.productCode}.${ext}`;
         img.order = 0;
       }
     }
+  };
+
+  // 删除图片
+  const handleDeleteImage = (index: number) => {
+    const updated = classifiedImages.filter((_, i) => i !== index);
+    recalculateNames(updated, productInfo.styleCode);
+    setClassifiedImages(updated);
+    // 清理已删除图片的选中状态
+    setSelectedIndices((prev) => {
+      const next = new Set<number>();
+      prev.forEach((idx) => {
+        if (idx < index) next.add(idx);
+        else if (idx > index) next.add(idx - 1);
+      });
+      return next;
+    });
   };
 
   const handleProceed = () => {
@@ -275,7 +291,7 @@ export default function Classify() {
           <button
             onClick={() => {
               if (scanResult) {
-                const classified = autoClassifyImages(scanResult.folder1200, productInfo.productCode);
+                const classified = autoClassifyImages(scanResult.folder1200, productInfo.styleCode, productInfo.productCode);
                 setClassifiedImages(classified);
                 clearSelection();
               }
@@ -367,6 +383,15 @@ export default function Classify() {
                     <option key={key} value={key}>{label}</option>
                   ))}
                 </select>
+
+                {/* 删除按钮 */}
+                <button
+                  onClick={() => handleDeleteImage(i)}
+                  className="shrink-0 p-1.5 text-ink-400 hover:text-rust hover:bg-rust/5"
+                  title="删除图片"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
               </div>
             ))}
           </div>

@@ -1,11 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
-import { createThumbnailUrl, isSquareImage } from '@/lib/imageProcessor';
+import { createThumbnailUrl } from '@/lib/imageProcessor';
 import { cn } from '@/lib/utils';
 import type { Pair1688, ScannedFile } from '@/types';
-import { ChevronRight, Image as ImageIcon, Users, Link2, Unlink } from 'lucide-react';
+import { ChevronRight, Image as ImageIcon, Users, Link2, Unlink, Plus, Trash2 } from 'lucide-react';
 import ImagePreview from '@/components/ImagePreview';
+
+// 基于文件名检测图片类型（方图/首图）
+function detectImageType(filename: string): '方图' | '首图' | null {
+  if (/方图/.test(filename)) return '方图';
+  if (/首图/.test(filename)) return '首图';
+  return null;
+}
 
 export default function Pair() {
   const navigate = useNavigate();
@@ -14,56 +21,67 @@ export default function Pair() {
   } = useStore();
 
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
-  const [squareFlags, setSquareFlags] = useState<Record<string, boolean>>({});
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
+  const [deletedNames, setDeletedNames] = useState<Set<string>>(new Set());
+  const [draggedImage, setDraggedImage] = useState<ScannedFile | null>(null);
+  const [dragOverSlot, setDragOverSlot] = useState<string | null>(null);
+  const draggedImageRef = useRef<ScannedFile | null>(null);
 
-  // 初始化配对
+  // 按文件名自然排序，保持文件夹原始顺序
+  const sortedImages = useMemo(() => {
+    if (!scanResult) return [];
+    return [...scanResult.folder1688].sort((a, b) =>
+      a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
+    );
+  }, [scanResult]);
+
+  // 基于文件名同步检测图片类型
+  const imageTypes = useMemo(() => {
+    const types: Record<string, '方图' | '首图' | null> = {};
+    for (const img of sortedImages) {
+      types[img.name] = detectImageType(img.name);
+    }
+    return types;
+  }, [sortedImages]);
+
+  // 生成缩略图
   useEffect(() => {
-    if (scanResult && scanResult.folder1688.length > 0 && pairs1688.length === 0) {
-      const images = scanResult.folder1688;
+    if (sortedImages.length === 0) return;
+    (async () => {
+      const newThumbs: Record<string, string> = {};
+      for (const img of sortedImages) {
+        try {
+          newThumbs[img.name] = await createThumbnailUrl(img.file, 300);
+        } catch {}
+      }
+      setThumbnails((prev) => ({ ...prev, ...newThumbs }));
+    })();
+  }, [sortedImages]);
+
+  // 初始化配对（仅首次进入时自动配对）
+  useEffect(() => {
+    if (sortedImages.length > 0 && pairs1688.length === 0) {
       const groups: Pair1688[] = [
         { squareImage: null, mainImage: null, groupName: '陈悦组' },
         { squareImage: null, mainImage: null, groupName: '杜青组' },
       ];
-
-      // 尝试自动配对
-      let groupIdx = 0;
-      for (const img of images) {
-        if (groupIdx >= 2) break;
-        const isSq = squareFlags[img.name];
-        if (isSq === undefined) continue;
-        if (isSq && !groups[groupIdx].squareImage) {
-          groups[groupIdx].squareImage = img;
-        } else if (!isSq && !groups[groupIdx].mainImage) {
-          groups[groupIdx].mainImage = img;
-        }
-        if (groups[groupIdx].squareImage && groups[groupIdx].mainImage) {
-          groupIdx++;
-        }
+      // 分别收集方图和首图，按文件名排序顺序
+      const squareImgs: ScannedFile[] = [];
+      const mainImgs: ScannedFile[] = [];
+      for (const img of sortedImages) {
+        const type = detectImageType(img.name);
+        if (type === '方图') squareImgs.push(img);
+        else if (type === '首图') mainImgs.push(img);
       }
-
+      // 按顺序分配到各组：第1张方图→陈悦组方图，第2张方图→杜青组方图...
+      for (let i = 0; i < groups.length; i++) {
+        if (squareImgs[i]) groups[i].squareImage = squareImgs[i];
+        if (mainImgs[i]) groups[i].mainImage = mainImgs[i];
+      }
       setPairs1688(groups);
     }
-  }, [scanResult, squareFlags]);
-
-  // 生成缩略图和检测方图
-  useEffect(() => {
-    if (!scanResult || scanResult.folder1688.length === 0) return;
-    const images = scanResult.folder1688;
-
-    (async () => {
-      const newThumbs: Record<string, string> = {};
-      const newFlags: Record<string, boolean> = {};
-      for (const img of images) {
-        try {
-          newThumbs[img.name] = await createThumbnailUrl(img.file, 300);
-          newFlags[img.name] = await isSquareImage(img.file);
-        } catch {}
-      }
-      setThumbnails((prev) => ({ ...prev, ...newThumbs }));
-      setSquareFlags((prev) => ({ ...prev, ...newFlags }));
-    })();
-  }, [scanResult]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortedImages]);
 
   if (!scanResult) {
     return (
@@ -76,9 +94,36 @@ export default function Pair() {
     );
   }
 
-  const images = scanResult.folder1688;
+  const images = sortedImages.filter(img => !deletedNames.has(img.name));
 
-  // 分配方图到组
+  // 删除图片：从列表移除并清理组中的引用
+  const handleDeleteImage = (img: ScannedFile) => {
+    setDeletedNames(prev => new Set(prev).add(img.name));
+    const updated = pairs1688.map(g => ({
+      ...g,
+      squareImage: g.squareImage === img ? null : g.squareImage,
+      mainImage: g.mainImage === img ? null : g.mainImage,
+    }));
+    setPairs1688(updated);
+  };
+
+  // 添加组：新组依次为 杜青组2 → 陈悦组2 → 杜青组3 → 陈悦组3 ...
+  const handleAddGroup = () => {
+    const currentCount = pairs1688.length;
+    const extraRound = Math.floor((currentCount - 2) / 2) + 2;
+    const isDuqing = (currentCount - 2) % 2 === 0;
+    const baseName = isDuqing ? '杜青组' : '陈悦组';
+    const groupName = `${baseName}${extraRound}`;
+    setPairs1688([...pairs1688, { squareImage: null, mainImage: null, groupName }]);
+  };
+
+  // 删除组（仅当组数>2时允许）
+  const handleRemoveGroup = (groupIdx: number) => {
+    if (pairs1688.length <= 2) return;
+    setPairs1688(pairs1688.filter((_, i) => i !== groupIdx));
+  };
+
+  // 分配图片到组
   const assignToGroup = (img: ScannedFile, groupIdx: number, type: 'square' | 'main') => {
     const updated = [...pairs1688];
     if (type === 'square') {
@@ -110,6 +155,40 @@ export default function Pair() {
     );
   };
 
+  // 拖拽处理
+  const handleDragStart = (e: React.DragEvent, img: ScannedFile) => {
+    draggedImageRef.current = img;
+    setDraggedImage(img);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnd = () => {
+    draggedImageRef.current = null;
+    setDraggedImage(null);
+    setDragOverSlot(null);
+  };
+
+  const handleSlotDragOver = (e: React.DragEvent, groupIdx: number, type: 'square' | 'main') => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverSlot(`${groupIdx}-${type}`);
+  };
+
+  const handleSlotDragLeave = () => {
+    setDragOverSlot(null);
+  };
+
+  const handleSlotDrop = (e: React.DragEvent, groupIdx: number, type: 'square' | 'main') => {
+    e.preventDefault();
+    setDragOverSlot(null);
+    const img = draggedImageRef.current;
+    if (img) {
+      assignToGroup(img, groupIdx, type);
+    }
+    draggedImageRef.current = null;
+    setDraggedImage(null);
+  };
+
   const allPaired = pairs1688.every((g) => g.squareImage && g.mainImage);
 
   const handleProceed = () => {
@@ -124,7 +203,7 @@ export default function Pair() {
         <div className="section-tag mb-2">03 · PAIR</div>
         <h1 className="text-3xl font-bold tracking-tightest">1688 配对</h1>
         <p className="mt-1 text-sm text-ink-500">
-          将1688文件夹中的方图和首图分别配对到陈悦组和杜青组，各2张一一对应。
+          将1688文件夹中的方图和首图分别配对到各组，支持拖拽配对。可点击"添加组"增加更多分组。
         </p>
       </div>
 
@@ -146,15 +225,20 @@ export default function Pair() {
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               {images.map((img, i) => {
                 const assigned = isImageAssigned(img);
-                const isSq = squareFlags[img.name];
+                const imgType = imageTypes[img.name];
                 return (
                   <div
                     key={i}
+                    draggable={!assigned}
+                    onDragStart={(e) => !assigned && handleDragStart(e, img)}
+                    onDragEnd={handleDragEnd}
                     className={cn(
                       'border-2 p-2 transition-colors',
                       assigned
                         ? 'border-ink-300 opacity-40'
-                        : 'border-ink-900 hover:border-flame'
+                        : 'border-ink-900 hover:border-flame',
+                      !assigned && 'cursor-grab active:cursor-grabbing',
+                      draggedImage === img && 'ring-2 ring-flame ring-offset-1'
                     )}
                   >
                     <div
@@ -172,31 +256,62 @@ export default function Pair() {
                           <ImageIcon className="h-5 w-5 text-ink-300" />
                         </div>
                       )}
-                      {isSq !== undefined && (
+                      {imgType && (
                         <span className={cn(
                           'absolute right-1 top-1 px-1.5 py-0.5 font-mono text-[9px] font-bold',
-                          isSq ? 'bg-flame text-white' : 'bg-steel text-white'
+                          imgType === '方图' ? 'bg-flame text-white' : 'bg-steel text-white'
                         )}>
-                          {isSq ? '方图' : '首图'}
+                          {imgType}
                         </span>
                       )}
                     </div>
                     <div className="truncate text-[11px] font-medium">{img.name}</div>
-                    {!assigned && (
-                      <div className="mt-2 flex gap-1">
-                        <button
-                          onClick={() => assignToGroup(img, 0, isSq ? 'square' : 'main')}
-                          className="flex-1 border border-ink-300 py-1 font-mono text-[10px] hover:border-flame hover:text-flame"
-                        >
-                          → 陈悦
-                        </button>
-                        <button
-                          onClick={() => assignToGroup(img, 1, isSq ? 'square' : 'main')}
-                          className="flex-1 border border-ink-300 py-1 font-mono text-[10px] hover:border-flame hover:text-flame"
-                        >
-                          → 杜青
-                        </button>
+                    <button
+                      onClick={() => handleDeleteImage(img)}
+                      className="mt-1 flex w-full items-center justify-center gap-1 border border-rust/50 py-1 font-mono text-[10px] text-rust hover:border-rust hover:bg-rust hover:text-white"
+                    >
+                      <Trash2 className="h-3 w-3" /> 删除
+                    </button>
+                    {/* 分配UI：≤2组用按钮，>2组用下拉栏 */}
+                    {!assigned && pairs1688.length <= 2 && (
+                      <div className="mt-1 space-y-1">
+                        {pairs1688.map((g, gi) => (
+                          <div key={gi} className="grid grid-cols-2 gap-1">
+                            <button
+                              onClick={() => assignToGroup(img, gi, 'square')}
+                              className="border border-ink-300 py-1 font-mono text-[10px] hover:border-flame hover:bg-flame hover:text-white"
+                            >
+                              {g.groupName}方图
+                            </button>
+                            <button
+                              onClick={() => assignToGroup(img, gi, 'main')}
+                              className="border border-ink-300 py-1 font-mono text-[10px] hover:border-flame hover:bg-flame hover:text-white"
+                            >
+                              {g.groupName}首图
+                            </button>
+                          </div>
+                        ))}
                       </div>
+                    )}
+                    {!assigned && pairs1688.length > 2 && (
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const [groupIdx, type] = e.target.value.split('-');
+                          if (groupIdx && type) {
+                            assignToGroup(img, parseInt(groupIdx), type as 'square' | 'main');
+                          }
+                        }}
+                        className="mt-1 w-full border border-ink-300 px-1 py-1 font-mono text-[10px]"
+                      >
+                        <option value="">分配到...</option>
+                        {pairs1688.map((g, gi) => (
+                          <optgroup key={gi} label={g.groupName}>
+                            <option value={`${gi}-square`}>方图</option>
+                            <option value={`${gi}-main`}>首图</option>
+                          </optgroup>
+                        ))}
+                      </select>
                     )}
                   </div>
                 );
@@ -218,11 +333,21 @@ export default function Pair() {
                 <div className="mb-3 flex items-center gap-2">
                   <Users className="h-4 w-4" />
                   <span className="font-bold">{group.groupName}</span>
-                  {group.squareImage && group.mainImage && (
-                    <span className="ml-auto flex items-center gap-1 font-mono text-[10px] text-green-600">
-                      <Link2 className="h-3 w-3" /> 已配对
-                    </span>
-                  )}
+                  <div className="ml-auto flex items-center gap-2">
+                    {group.squareImage && group.mainImage && (
+                      <span className="flex items-center gap-1 font-mono text-[10px] text-green-600">
+                        <Link2 className="h-3 w-3" /> 已配对
+                      </span>
+                    )}
+                    {pairs1688.length > 2 && (
+                      <button
+                        onClick={() => handleRemoveGroup(i)}
+                        className="flex items-center gap-1 border border-rust/50 px-1.5 py-0.5 font-mono text-[10px] text-rust hover:border-rust hover:bg-rust hover:text-white"
+                      >
+                        <Trash2 className="h-3 w-3" /> 删除组
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
@@ -235,6 +360,10 @@ export default function Pair() {
                       image={group.squareImage}
                       thumbnail={group.squareImage ? thumbnails[group.squareImage.name] : null}
                       onRemove={() => removeFromGroup(i, 'square')}
+                      onDragOver={(e) => handleSlotDragOver(e, i, 'square')}
+                      onDragLeave={handleSlotDragLeave}
+                      onDrop={(e) => handleSlotDrop(e, i, 'square')}
+                      isDragOver={dragOverSlot === `${i}-square`}
                     />
                   </div>
 
@@ -247,6 +376,10 @@ export default function Pair() {
                       image={group.mainImage}
                       thumbnail={group.mainImage ? thumbnails[group.mainImage.name] : null}
                       onRemove={() => removeFromGroup(i, 'main')}
+                      onDragOver={(e) => handleSlotDragOver(e, i, 'main')}
+                      onDragLeave={handleSlotDragLeave}
+                      onDrop={(e) => handleSlotDrop(e, i, 'main')}
+                      isDragOver={dragOverSlot === `${i}-main`}
                     />
                   </div>
                 </div>
@@ -254,11 +387,18 @@ export default function Pair() {
             ))}
           </div>
 
+          <button
+            onClick={handleAddGroup}
+            className="btn-outline mt-2 flex w-full items-center justify-center gap-1"
+          >
+            <Plus className="h-4 w-4" /> 添加组
+          </button>
+
           <div className="mt-4 flex items-center gap-2 text-sm text-ink-500">
             {allPaired ? (
               <span className="text-green-600">✓ 所有组已配对完成</span>
             ) : (
-              <span>请为每组分配方图和首图</span>
+              <span>请为每组分配方图和首图（可拖拽或点击按钮）</span>
             )}
           </div>
         </section>
@@ -289,20 +429,44 @@ export default function Pair() {
 
 function PairSlot({
   image, thumbnail, onRemove,
+  onDragOver, onDragLeave, onDrop, isDragOver,
 }: {
   image: ScannedFile | null;
   thumbnail: string | null;
   onRemove: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDragLeave: () => void;
+  onDrop: (e: React.DragEvent) => void;
+  isDragOver: boolean;
 }) {
   if (!image) {
     return (
-      <div className="flex aspect-square items-center justify-center border-2 border-dashed border-ink-300 bg-bone-50">
-        <ImageIcon className="h-6 w-6 text-ink-300" />
+      <div
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+        className={cn(
+          'flex aspect-square items-center justify-center border-2 border-dashed bg-bone-50 transition-colors',
+          isDragOver ? 'border-flame bg-flame/10' : 'border-ink-300'
+        )}
+      >
+        <div className="text-center">
+          <ImageIcon className="mx-auto h-6 w-6 text-ink-300" />
+          <span className="mt-1 block font-mono text-[9px] text-ink-400">拖拽到此处</span>
+        </div>
       </div>
     );
   }
   return (
-    <div className="relative border-2 border-ink-900">
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className={cn(
+        'relative border-2 transition-colors',
+        isDragOver ? 'border-flame bg-flame/10' : 'border-ink-900'
+      )}
+    >
       <div className="aspect-square overflow-hidden bg-ink-100">
         {thumbnail && (
           <img src={thumbnail} alt={image.name} className="h-full w-full object-cover" />

@@ -99,17 +99,22 @@ export async function fillSPSheet(
     ws.getCell('H2').value = info.material;
   }
 
-  // === M2,M3,M4 三档零售价 ===
-  ws.getCell('M2').value = prices.tier1;
-  ws.getCell('M3').value = prices.tier2;
-  ws.getCell('M4').value = prices.tier3;
+  // === M2,M3,M4 三档零售价 (从低到高: 40% / 45% / 50%) ===
+  ws.getCell('M2').value = prices.tier3;  // 最低价 (40%利润率)
+  ws.getCell('M3').value = prices.tier2;  // 中间价 (45%利润率)
+  ws.getCell('M4').value = prices.tier1;  // 最高价 (50%利润率)
 
-  // N2,N3,N4 已有公式 =1-(D/M), 保持不变
+  // === N2,N3,N4 利润率公式 =1-(D/M)，同时写入预计算结果 ===
+  const profitRate = (price: number) => price > 0 ? Math.round((1 - costValue / price) * 10000) / 10000 : 0;
+  ws.getCell('N2').value = { formula: '1-(D2/M2)', result: profitRate(prices.tier3) };
+  ws.getCell('N3').value = { formula: '1-(D3/M3)', result: profitRate(prices.tier2) };
+  ws.getCell('N4').value = { formula: '1-(D4/M4)', result: profitRate(prices.tier1) };
 
   // === A7:C7 参考标题 ===
   ws.getCell('A7').value = info.competitorTitle || '';
 
-  // D7 已有公式 =LEN(A7), 保持不变
+  // === D7 字符长度公式 =LEN(A7)，同时写入预计算结果 ===
+  ws.getCell('D7').value = { formula: 'LEN(A7)', result: (info.competitorTitle || '').length };
 
   // === E7 关键词 ===
   ws.getCell('E7').value = info.keywords || '';
@@ -181,7 +186,8 @@ export async function fillTable3(
 
   // A2:C2 参考标题
   wsProduct.getCell('A2').value = info.competitorTitle || '';
-  // D2 已有公式 =LEN(A2), 保持不变
+  // === D2 字符长度公式 =LEN(A2)，同时写入预计算结果 ===
+  wsProduct.getCell('D2').value = { formula: 'LEN(A2)', result: (info.competitorTitle || '').length };
   // E2 关键词
   wsProduct.getCell('E2').value = info.keywords || '';
   // F2 相关链接
