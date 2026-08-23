@@ -116,6 +116,7 @@ export interface ExportItem {
   source: string;     // 来源描述
   blob?: Blob;        // 文件数据(如果是文件)
   children?: ExportChild[]; // 文件夹内的内容（支持嵌套子文件夹）
+  replaceIfExists?: boolean; // 替换已有同名文件夹
 }
 
 // ===================== 步骤状态 =====================

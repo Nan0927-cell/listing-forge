@@ -146,7 +146,7 @@ export default function ExportPage() {
       const group1Name = `${mergedCode}-S-${lineLabel}`;
       const group1Items: ExportItem[] = [
         // 1688文件夹：内含SKU子文件夹，替换已有同名文件夹
-        { type: 'folder', name: mergedCode, source: '1688文件夹(SKU分组)', children: get1688Files(), replaceIfExists: true as any },
+        { type: 'folder', name: mergedCode, source: '1688文件夹(SKU分组)', children: get1688Files(), replaceIfExists: true },
         { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
       ];
       if (fillTables && tableResults[1]) {
