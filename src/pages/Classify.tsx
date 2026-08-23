@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
 import { autoClassifyImages, createThumbnailUrl } from '@/lib/imageProcessor';
@@ -7,7 +7,7 @@ import type { ClassifiedImage, ImageCategory } from '@/types';
 import ImagePreview from '@/components/ImagePreview';
 import {
   Image as ImageIcon, Folder, Video, FileBox,
-  ChevronRight, RefreshCw, GripVertical,
+  ChevronRight, ChevronLeft, RefreshCw, GripVertical,
   CheckSquare, Square, Layers, X, Trash2,
 } from 'lucide-react';
 
@@ -36,7 +36,12 @@ export default function Classify() {
   const {
     scanResult, productInfo, classifiedImages,
     setClassifiedImages, setStepStatus, setError,
+    listingMode, multiProductInfos,
   } = useStore();
+
+  // 多SKU模式下使用第一组SKU的信息
+  const isMulti = listingMode !== 'single';
+  const activeInfo = isMulti ? (multiProductInfos[0] || productInfo) : productInfo;
 
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -44,14 +49,50 @@ export default function Classify() {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [activeGroupIndex, setActiveGroupIndex] = useState(0);
+
+  // 多SKU分组：计算组数和当前组图片
+  const groupCount = useMemo(() => {
+    if (!isMulti) return 1;
+    const indices = new Set(classifiedImages.map(img => img.groupIndex ?? 0));
+    return indices.size;
+  }, [classifiedImages, isMulti]);
+
+  // 当前组图片在 classifiedImages 中的全局索引
+  const currentGroupGlobalIndices = useMemo(() => {
+    if (!isMulti) return classifiedImages.map((_, i) => i);
+    return classifiedImages
+      .map((img, i) => ({ gi: img.groupIndex ?? 0, i }))
+      .filter(({ gi }) => gi === activeGroupIndex)
+      .map(({ i }) => i);
+  }, [classifiedImages, isMulti, activeGroupIndex]);
+
+  // 当前组显示的图片
+  const displayImages = useMemo(() => {
+    return currentGroupGlobalIndices.map(i => classifiedImages[i]);
+  }, [classifiedImages, currentGroupGlobalIndices]);
+
+  // 当前组的SKU编码
+  const currentSkuCode = useMemo(() => {
+    if (!isMulti) return activeInfo.productCode;
+    return multiProductInfos[activeGroupIndex]?.productCode || '';
+  }, [isMulti, multiProductInfos, activeGroupIndex, activeInfo.productCode]);
 
   // 自动分类
   useEffect(() => {
     if (scanResult && scanResult.folder1200.length > 0 && classifiedImages.length === 0) {
-      const classified = autoClassifyImages(scanResult.folder1200, productInfo.styleCode, productInfo.productCode);
+      const multiCodes = isMulti
+        ? multiProductInfos.map(p => p.productCode).filter(c => c.trim())
+        : undefined;
+      const classified = autoClassifyImages(
+        scanResult.folder1200,
+        activeInfo.styleCode,
+        activeInfo.productCode,
+        multiCodes
+      );
       setClassifiedImages(classified);
     }
-  }, [scanResult, productInfo.productCode, productInfo.styleCode, classifiedImages.length, setClassifiedImages]);
+  }, [scanResult, activeInfo.productCode, activeInfo.styleCode, classifiedImages.length, setClassifiedImages, isMulti, multiProductInfos]);
 
   // 生成缩略图
   useEffect(() => {
@@ -91,12 +132,12 @@ export default function Classify() {
     );
   }
 
-  // 修改分类
-  const handleCategoryChange = (index: number, category: ImageCategory) => {
+  // 修改分类（localIndex 为当前组内索引）
+  const handleCategoryChange = (localIndex: number, category: ImageCategory) => {
+    const globalIdx = isMulti ? currentGroupGlobalIndices[localIndex] : localIndex;
     const updated = [...classifiedImages];
-    updated[index] = { ...updated[index], category };
-    // 重新生成名称
-    recalculateNames(updated, productInfo.styleCode);
+    updated[globalIdx] = { ...updated[globalIdx], category };
+    recalculateNames(updated, activeInfo.styleCode);
     setClassifiedImages(updated);
   };
 
@@ -113,12 +154,12 @@ export default function Classify() {
     });
   };
 
-  // 多选：全选 / 取消全选
+  // 多选：全选 / 取消全选（当前组）
   const toggleSelectAll = () => {
-    if (selectedIndices.size === classifiedImages.length) {
+    if (selectedIndices.size === displayImages.length && displayImages.length > 0) {
       setSelectedIndices(new Set());
     } else {
-      setSelectedIndices(new Set(classifiedImages.map((_, i) => i)));
+      setSelectedIndices(new Set(displayImages.map((_, i) => i)));
     }
   };
 
@@ -127,10 +168,12 @@ export default function Classify() {
 
   // 多选：批量修改分类
   const handleBatchCategoryChange = (category: ImageCategory) => {
-    const updated = classifiedImages.map((img, i) =>
-      selectedIndices.has(i) ? { ...img, category } : img
-    );
-    recalculateNames(updated, productInfo.styleCode);
+    const updated = [...classifiedImages];
+    for (const localIdx of selectedIndices) {
+      const globalIdx = isMulti ? currentGroupGlobalIndices[localIdx] : localIdx;
+      updated[globalIdx] = { ...updated[globalIdx], category };
+    }
+    recalculateNames(updated, activeInfo.styleCode);
     setClassifiedImages(updated);
     clearSelection();
   };
@@ -154,29 +197,52 @@ export default function Classify() {
     setDragOverIndex(null);
   };
 
-  // 拖拽排序 - 放置
-  const handleDrop = (index: number) => {
-    if (dragIndex === null || dragIndex === index) {
+  // 拖拽排序 - 放置（组内拖拽）
+  const handleDrop = (localDropIndex: number) => {
+    if (dragIndex === null || dragIndex === localDropIndex) {
       setDragIndex(null);
       setDragOverIndex(null);
       return;
     }
+    const globalDragIdx = isMulti ? currentGroupGlobalIndices[dragIndex] : dragIndex;
+    const globalDropIdx = isMulti ? currentGroupGlobalIndices[localDropIndex] : localDropIndex;
     const updated = [...classifiedImages];
-    const [draggedItem] = updated.splice(dragIndex, 1);
-    updated.splice(index, 0, draggedItem);
-    recalculateNames(updated, productInfo.styleCode);
+    const [draggedItem] = updated.splice(globalDragIdx, 1);
+    const adjustedDropIdx = globalDragIdx < globalDropIdx ? globalDropIdx - 1 : globalDropIdx;
+    updated.splice(adjustedDropIdx, 0, draggedItem);
+    recalculateNames(updated, activeInfo.styleCode);
     setClassifiedImages(updated);
     setDragIndex(null);
     setDragOverIndex(null);
   };
 
-  // 重新计算名称
+  // 重新计算名称（分组感知：组内按类别排序，组间编号接续）
   const recalculateNames = (images: ClassifiedImage[], styleCode: string) => {
-    const order: ImageCategory[] = ['main', 'scene', 'detail-grid', 'detail', 'white-bg'];
+    const groupMap = new Map<number, ClassifiedImage[]>();
+    for (const img of images) {
+      const gi = img.groupIndex ?? 0;
+      if (!groupMap.has(gi)) groupMap.set(gi, []);
+      groupMap.get(gi)!.push(img);
+    }
+
+    const catOrder: ImageCategory[] = ['main', 'scene', 'detail-grid', 'detail', 'white-bg'];
     let orderNum = 1;
-    for (const cat of order) {
-      for (const img of images) {
-        if (img.category === cat) {
+
+    for (const gi of [...groupMap.keys()].sort((a, b) => a - b)) {
+      const groupImgs = groupMap.get(gi)!;
+
+      for (const cat of catOrder) {
+        for (const img of groupImgs) {
+          if (img.category === cat) {
+            const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+            img.newName = `${styleCode}-00-${String(orderNum).padStart(2, '0')}.${ext}`;
+            img.order = orderNum;
+            orderNum++;
+          }
+        }
+      }
+      for (const img of groupImgs) {
+        if (img.category === 'unclassified') {
           const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
           img.newName = `${styleCode}-00-${String(orderNum).padStart(2, '0')}.${ext}`;
           img.order = orderNum;
@@ -184,40 +250,63 @@ export default function Classify() {
         }
       }
     }
-    // 属性图
+
+    // 属性图保持SKU编码命名（按组对应的SKU编码）
     for (const img of images) {
       if (img.category === 'attribute') {
         const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        img.newName = `${productInfo.productCode}.${ext}`;
+        const gi = img.groupIndex ?? 0;
+        const groupCode = isMulti
+          ? (multiProductInfos[gi]?.productCode || activeInfo.productCode)
+          : activeInfo.productCode;
+        img.newName = `${groupCode}.${ext}`;
         img.order = 0;
       }
     }
   };
 
-  // 删除图片
-  const handleDeleteImage = (index: number) => {
-    const updated = classifiedImages.filter((_, i) => i !== index);
-    recalculateNames(updated, productInfo.styleCode);
+  // 删除图片（localIndex 为当前组内索引）
+  const handleDeleteImage = (localIndex: number) => {
+    const globalIdx = isMulti ? currentGroupGlobalIndices[localIndex] : localIndex;
+    const updated = classifiedImages.filter((_, i) => i !== globalIdx);
+    recalculateNames(updated, activeInfo.styleCode);
     setClassifiedImages(updated);
-    // 清理已删除图片的选中状态
     setSelectedIndices((prev) => {
       const next = new Set<number>();
       prev.forEach((idx) => {
-        if (idx < index) next.add(idx);
-        else if (idx > index) next.add(idx - 1);
+        if (idx < localIndex) next.add(idx);
+        else if (idx > localIndex) next.add(idx - 1);
       });
       return next;
     });
   };
 
+  // 下一步：多SKU模式下切换到下一组，最后一组才进入配对
   const handleProceed = () => {
+    if (isMulti && activeGroupIndex < groupCount - 1) {
+      setActiveGroupIndex(prev => prev + 1);
+      setSelectedIndices(new Set());
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
     setStepStatus('classify', 'done');
     setStepStatus('pair', 'active');
     navigate('/pair');
   };
 
-  // 构建预览图片数组（只包含已生成缩略图的图片）
-  const previewImages = classifiedImages
+  // 上一步：多SKU模式下回到上一组，第一组返回工作台
+  const handlePrev = () => {
+    if (isMulti && activeGroupIndex > 0) {
+      setActiveGroupIndex(prev => prev - 1);
+      setSelectedIndices(new Set());
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    navigate('/');
+  };
+
+  // 构建预览图片数组（当前组）
+  const previewImages = displayImages
     .map((img, originalIndex) => ({
       src: thumbnails[img.file.name] || '',
       name: img.file.name,
@@ -253,7 +342,7 @@ export default function Classify() {
       </div>
 
       {/* 1688 图片预览（提示） */}
-      {scanResult.folder1688.length > 0 && (
+      {scanResult.folder1688.length > 0 && !isMulti && (
         <div className="card-industrial p-4">
           <div className="flex items-center justify-between">
             <div>
@@ -269,6 +358,41 @@ export default function Classify() {
         </div>
       )}
 
+      {/* 多SKU分组指示器 */}
+      {isMulti && groupCount > 0 && (
+        <div className="card-industrial flex items-center justify-between p-4">
+          <div className="flex items-center gap-3">
+            <span className="flex h-8 w-8 items-center justify-center border-2 border-ink-900 bg-ink-900 font-mono text-sm font-bold text-bone">
+              {activeGroupIndex + 1}
+            </span>
+            <div>
+              <div className="font-mono text-sm font-bold text-flame">{currentSkuCode || '未填写'}</div>
+              <div className="text-xs text-ink-500">
+                第 {activeGroupIndex + 1} 组 / 共 {groupCount} 组 · 当前组 {displayImages.length} 张图片
+              </div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {Array.from({ length: groupCount }, (_, i) => (
+              <button
+                key={i}
+                onClick={() => { setActiveGroupIndex(i); setSelectedIndices(new Set()); }}
+                className={cn(
+                  'flex h-6 w-6 items-center justify-center border-2 font-mono text-[10px] font-bold transition-all',
+                  i === activeGroupIndex
+                    ? 'border-flame bg-flame text-bone'
+                    : i < activeGroupIndex
+                      ? 'border-ink-300 bg-ink-100 text-ink-500'
+                      : 'border-ink-300 bg-transparent text-ink-400'
+                )}
+              >
+                {i + 1}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* 1200 图片分类 */}
       <section className="card-industrial p-5">
         <div className="mb-4 flex items-center justify-between">
@@ -278,7 +402,7 @@ export default function Classify() {
               className="flex items-center gap-1.5 font-mono text-xs text-ink-600 hover:text-flame"
               title="全选 / 取消全选"
             >
-              {selectedIndices.size === classifiedImages.length && classifiedImages.length > 0 ? (
+              {selectedIndices.size === displayImages.length && displayImages.length > 0 ? (
                 <CheckSquare className="h-4 w-4 text-flame" />
               ) : (
                 <Square className="h-4 w-4" />
@@ -291,9 +415,18 @@ export default function Classify() {
           <button
             onClick={() => {
               if (scanResult) {
-                const classified = autoClassifyImages(scanResult.folder1200, productInfo.styleCode, productInfo.productCode);
+                const multiCodes = isMulti
+                  ? multiProductInfos.map(p => p.productCode).filter(c => c.trim())
+                  : undefined;
+                const classified = autoClassifyImages(
+                  scanResult.folder1200,
+                  activeInfo.styleCode,
+                  activeInfo.productCode,
+                  multiCodes
+                );
                 setClassifiedImages(classified);
                 clearSelection();
+                setActiveGroupIndex(0);
               }
             }}
             className="btn-outline text-xs"
@@ -302,14 +435,14 @@ export default function Classify() {
           </button>
         </div>
 
-        {classifiedImages.length === 0 ? (
+        {displayImages.length === 0 ? (
           <div className="py-8 text-center text-ink-400">
             <ImageIcon className="mx-auto mb-2 h-8 w-8 opacity-50" />
-            1200 文件夹中没有找到图片
+            {isMulti ? '当前组没有图片' : '1200 文件夹中没有找到图片'}
           </div>
         ) : (
           <div className="space-y-2">
-            {classifiedImages.map((img, i) => (
+            {displayImages.map((img, i) => (
               <div
                 key={i}
                 draggable
@@ -435,11 +568,19 @@ export default function Classify() {
 
       {/* 导航 */}
       <div className="flex justify-between">
-        <button onClick={() => navigate('/')} className="btn-outline">
-          返回工作台
+        <button onClick={handlePrev} className="btn-outline">
+          {isMulti && activeGroupIndex > 0 ? (
+            <><ChevronLeft className="h-4 w-4" /> 上一组</>
+          ) : (
+            '返回工作台'
+          )}
         </button>
         <button onClick={handleProceed} className="btn-industrial">
-          确认分类，继续 <ChevronRight className="h-4 w-4" />
+          {isMulti && activeGroupIndex < groupCount - 1 ? (
+            <>下一组 <ChevronRight className="h-4 w-4" /></>
+          ) : (
+            <>确认分类，继续 <ChevronRight className="h-4 w-4" /></>
+          )}
         </button>
       </div>
 

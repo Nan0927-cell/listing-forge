@@ -1,6 +1,137 @@
 import ExcelJS from 'exceljs';
+import JSZip from 'jszip';
 import type { ProductInfo, TableFillResult, TablePrices } from '@/types';
-import { calculateRetailPrice, formatPrice } from './utils';
+import { calculateRetailPrice, formatPrice, generateMergedSkuName } from './utils';
+
+// ===================== 后处理：向xlsx注入图片 =====================
+
+interface ImageInjection {
+  blob: Blob;
+  startRow: number; // 0-indexed (Excel行号-1)
+  endRow: number;
+  col: number;      // 0-indexed (A=0)
+}
+
+async function injectImagesIntoXlsx(
+  xlsxBuffer: ArrayBuffer,
+  images: ImageInjection[],
+  sheetName: string
+): Promise<ArrayBuffer> {
+  if (images.length === 0) return xlsxBuffer;
+
+  const zip = await JSZip.loadAsync(xlsxBuffer);
+
+  // 1. 找到工作表文件路径
+  const workbookXml = await zip.file('xl/workbook.xml')?.async('string');
+  if (!workbookXml) return xlsxBuffer;
+
+  const sheetMatch = workbookXml.match(new RegExp(`<sheet[^>]*name="${sheetName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"[^>]*r:id="(rId\\d+)"`));
+  if (!sheetMatch) {
+    // 回退：取第一个sheet
+    const fallbackMatch = workbookXml.match(/<sheet[^>]*r:id="(rId\d+)"/);
+    if (!fallbackMatch) return xlsxBuffer;
+    var sheetRId = fallbackMatch[1];
+  } else {
+    var sheetRId = sheetMatch[1];
+  }
+
+  const relsXml = await zip.file('xl/_rels/workbook.xml.rels')?.async('string');
+  if (!relsXml) return xlsxBuffer;
+  const relMatch = relsXml.match(new RegExp(`Id="${sheetRId}"[^>]*Target="([^"]+)"`));
+  if (!relMatch) return xlsxBuffer;
+  const sheetFile = `xl/${relMatch[1].replace(/^\.\//, '')}`;
+
+  // 2. 添加图片文件到xl/media/，构建drawing XML
+  const drawingEntries: string[] = [];
+  for (let i = 0; i < images.length; i++) {
+    const img = images[i];
+    const imgBuffer = await img.blob.arrayBuffer();
+    const isPng = img.blob.type.includes('png') || /\.(png)$/i.test((img.blob as File).name || '');
+    const ext = isPng ? 'png' : 'jpeg';
+    const imgFileName = `image${i + 1}.${ext}`;
+    zip.file(`xl/media/${imgFileName}`, imgBuffer);
+
+    drawingEntries.push(
+      `<xdr:twoCellAnchor>` +
+      `<xdr:from><xdr:col>${img.col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${img.startRow}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from>` +
+      `<xdr:to><xdr:col>${img.col}</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>${img.endRow + 1}</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to>` +
+      `<xdr:pic><xdr:nvPicPr><xdr:cNvPr id="${i + 1}" name="Image ${i + 1}"/><xdr:cNvPicPr/></xdr:nvPicPr>` +
+      `<xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId${i + 1}"/></xdr:blipFill>` +
+      `<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic>` +
+      `</xdr:twoCellAnchor>`
+    );
+  }
+
+  // 3. 创建drawing XML
+  const drawingXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+    `<xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" ` +
+    `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ` +
+    `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">\n` +
+    drawingEntries.join('\n') + '\n</xdr:wsDr>';
+  zip.file('xl/drawings/drawing1.xml', drawingXml);
+
+  // 4. 创建drawing关系
+  const drawingRels = images.map((img, i) => {
+    const isPng = img.blob.type.includes('png') || /\.(png)$/i.test((img.blob as File).name || '');
+    const ext = isPng ? 'png' : 'jpeg';
+    return `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image${i + 1}.${ext}"/>`;
+  }).join('');
+  zip.file('xl/drawings/_rels/drawing1.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${drawingRels}</Relationships>`);
+
+  // 5. 更新sheet关系文件
+  const sheetRelsPath = sheetFile.replace(/worksheets\/([^/]+)$/, 'worksheets/_rels/$1').replace(/$/, '.rels');
+  let sheetRels = await zip.file(sheetRelsPath)?.async('string') || '';
+
+  // 找到可用的rId
+  let maxRId = 0;
+  const rIdMatches = sheetRels.matchAll(/Id="rId(\d+)"/g);
+  for (const m of rIdMatches) {
+    maxRId = Math.max(maxRId, parseInt(m[1]));
+  }
+  const drawingRelId = `rId${maxRId + 1}`;
+
+  if (sheetRels) {
+    sheetRels = sheetRels.replace('</Relationships>',
+      `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`);
+  } else {
+    sheetRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+      `<Relationship Id="${drawingRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>`;
+  }
+  zip.file(sheetRelsPath, sheetRels);
+
+  // 6. 在sheet XML中添加drawing引用
+  let sheetXml = await zip.file(sheetFile)?.async('string') || '';
+  if (sheetXml && !sheetXml.includes('<drawing')) {
+    const rNs = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+    if (sheetXml.includes('</worksheet>')) {
+      // 确保r命名空间存在
+      if (!sheetXml.includes('xmlns:r=')) {
+        sheetXml = sheetXml.replace('<worksheet', `<worksheet ${rNs}`);
+      }
+      sheetXml = sheetXml.replace('</worksheet>',
+        `<drawing r:id="${drawingRelId}"/></worksheet>`);
+      zip.file(sheetFile, sheetXml);
+    }
+  }
+
+  // 7. 更新[Content_Types].xml
+  let contentTypes = await zip.file('[Content_Types].xml')?.async('string') || '';
+  if (!contentTypes.includes('Extension="png"')) {
+    contentTypes = contentTypes.replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>');
+  }
+  if (!contentTypes.includes('Extension="jpeg"')) {
+    contentTypes = contentTypes.replace('</Types>', '<Default Extension="jpeg" ContentType="image/jpeg"/></Types>');
+  }
+  if (!contentTypes.includes('/xl/drawings/drawing1.xml')) {
+    contentTypes = contentTypes.replace('</Types>',
+      '<Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+  }
+  zip.file('[Content_Types].xml', contentTypes);
+
+  const result = await zip.generateAsync({ type: 'arraybuffer' });
+  return result;
+}
 
 // ===================== 加载Excel模板 =====================
 
@@ -40,6 +171,10 @@ export async function fillSPSheet(
   options?: {
     skipPhysicalInfo?: boolean;
     priceOverrides?: PriceOverrides;
+    multiInfos?: ProductInfo[];
+    multiAttrBlobs?: (Blob | null)[];
+    mergedCode?: string;
+    multiPriceOverrides?: PriceOverrides[];
   }
 ): Promise<TableFillResult> {
   const workbook = new ExcelJS.Workbook();
@@ -48,97 +183,233 @@ export async function fillSPSheet(
   const ws = workbook.getWorksheet('SP刊登资料');
   if (!ws) throw new Error('SP刊登资料 工作表不存在');
 
-  const cost = parseFloat(info.costPrice) || 0;
-  const autoPrices = calculatePrices(cost);
-  const productCode = info.productCode;
+  const isMulti = options?.multiInfos && options.multiInfos.length > 1;
+  const allInfos = isMulti ? options.multiInfos! : [info];
+  const allAttrBlobs = isMulti && options?.multiAttrBlobs
+    ? options.multiAttrBlobs
+    : [attributeImageBlob];
+  const numSkus = allInfos.length;
+  const offset = (numSkus - 1) * 3;
+  const pendingImages: { blob: Blob; range: string }[] = [];
 
-  // 合并售价：用户覆盖优先，否则用自动计算值
-  const prices = {
-    tier1: options?.priceOverrides?.tier1 ?? autoPrices.tier1,
-    tier2: options?.priceOverrides?.tier2 ?? autoPrices.tier2,
-    tier3: options?.priceOverrides?.tier3 ?? autoPrices.tier3,
+  // 辅助函数：复制一行的所有单元格内容和样式到目标行
+  const copyRow = (srcRow: number, tgtRow: number) => {
+    const src = ws.getRow(srcRow);
+    const tgt = ws.getRow(tgtRow);
+    src.eachCell({ includeEmpty: true }, (cell: any, colNum: number) => {
+      const tgtCell = tgt.getCell(colNum);
+      tgtCell.value = cell.value;
+      // ExcelJS 的 style 属性 (font/border/fill/alignment) 是原型上的 getter，
+      // 不能用 spread 操作符复制，必须逐个访问并构建新对象
+      const srcStyle = cell.style;
+      if (srcStyle) {
+        const styleObj: any = {};
+        if (srcStyle.font) styleObj.font = srcStyle.font;
+        if (srcStyle.alignment) styleObj.alignment = srcStyle.alignment;
+        if (srcStyle.border) styleObj.border = srcStyle.border;
+        if (srcStyle.fill) styleObj.fill = srcStyle.fill;
+        if (cell.numFmt) styleObj.numFmt = cell.numFmt;
+        if (Object.keys(styleObj).length > 0) {
+          tgtCell.style = styleObj;
+        }
+      }
+    });
+    // 复制行高
+    if (src.height) {
+      tgt.height = src.height;
+    }
   };
 
-  // === A2:A4 浮动属性图 ===
-  if (attributeImageBlob) {
-    const imgBuffer = await attributeImageBlob.arrayBuffer();
-    const ext = attributeImageBlob.type.includes('png') ? 'png' : 'jpeg';
-    const imageId = workbook.addImage({
-      buffer: imgBuffer,
-      extension: ext as any,
-    });
-    ws.addImage(imageId, 'A2:A4');
+  // 多SKU: 为每个额外SKU插入3行，并复制模板行(第2-4行)的内容
+  if (isMulti) {
+    const rowsToAdd = (numSkus - 1) * 3;
+
+    // 收集模板中已有的合并单元格范围（spliceRows 不会自动移位合并范围）
+    // ExcelJS 4.4.0: _merges 是字典对象 { masterAddr: Range }，model.merges 是字符串数组
+    const existingMerges: string[] = [];
+    if (ws.model.merges) {
+      ws.model.merges.forEach((merge: any) => {
+        if (typeof merge === 'string') {
+          existingMerges.push(merge);
+        }
+      });
+    }
+
+    // 先取消所有合并，避免插入行后合并范围错位导致冲突
+    // 注意：ExcelJS 方法名是 unMergeCells（大写M）
+    for (const merge of existingMerges) {
+      try { (ws as any).unMergeCells(merge); } catch { /* 忽略取消失败 */ }
+    }
+
+    // 插入空行
+    ws.spliceRows(5, 0, ...Array(rowsToAdd).fill(undefined));
+
+    // 重新应用合并：第5行及以上的范围需要加上偏移量
+    for (const merge of existingMerges) {
+      const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+      if (m) {
+        const [, col1, row1, col2, row2] = m;
+        const r1 = parseInt(row1);
+        const r2 = parseInt(row2);
+        if (r1 >= 5) {
+          ws.mergeCells(`${col1}${r1 + rowsToAdd}:${col2}${r2 + rowsToAdd}`);
+        } else {
+          ws.mergeCells(`${col1}${r1}:${col2}${r2}`);
+        }
+      }
+    }
+
+    for (let i = 1; i < numSkus; i++) {
+      const targetStart = 2 + i * 3;
+      copyRow(2, targetStart);
+      copyRow(3, targetStart + 1);
+      copyRow(4, targetStart + 2);
+    }
+
+    // 多SKU: 为参考标题/关键词/参考链接插入额外行（每个SKU一行）
+    if (numSkus > 1) {
+      const extraTitleRows = numSkus - 1;
+      const titleInsertPos = 8 + offset; // 在第一个参考标题行(7+offset)之后插入
+
+      // 收集插入点及以下的合并范围，取消后重新应用
+      const titleMerges: string[] = [];
+      if (ws.model.merges) {
+        ws.model.merges.forEach((merge: any) => {
+          if (typeof merge === 'string') {
+            const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+            if (m) {
+              const r1 = parseInt(m[2]);
+              if (r1 >= titleInsertPos) {
+                titleMerges.push(merge);
+              }
+            }
+          }
+        });
+      }
+      for (const merge of titleMerges) {
+        try { (ws as any).unMergeCells(merge); } catch { /* 忽略 */ }
+      }
+
+      ws.spliceRows(titleInsertPos, 0, ...Array(extraTitleRows).fill(undefined));
+
+      for (const merge of titleMerges) {
+        const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+        if (m) {
+          const [, col1, row1, col2, row2] = m;
+          const r1 = parseInt(row1) + extraTitleRows;
+          const r2 = parseInt(row2) + extraTitleRows;
+          ws.mergeCells(`${col1}${r1}:${col2}${r2}`);
+        }
+      }
+
+      // 复制参考标题行的格式到新插入的行
+      for (let i = 0; i < extraTitleRows; i++) {
+        copyRow(7 + offset, titleInsertPos + i);
+      }
+    }
   }
 
-  // === B2:B4 商品编码 ===
-  ws.getCell('B2').value = productCode;
+  // 填写每组SKU数据
+  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
+    const skuInfo = allInfos[skuIdx];
+    const startRow = 2 + skuIdx * 3;
+    const endRow = startRow + 2;
 
-  // === C2:C4 产品中文名 ===
-  ws.getCell('C2').value = info.productName || '';
+    const cost = parseFloat(skuInfo.costPrice) || 0;
+    const autoPrices = calculatePrices(cost);
 
-  // === D2,D3,D4 成本价 (填三次) ===
-  const costValue = parseFloat(info.costPrice) || 0;
-  ws.getCell('D2').value = costValue;
-  ws.getCell('D3').value = costValue;
-  ws.getCell('D4').value = costValue;
+    const skuPriceOverrides = options?.multiPriceOverrides?.[skuIdx];
+    const prices = {
+      tier1: skuPriceOverrides?.tier1 ?? options?.priceOverrides?.tier1 ?? autoPrices.tier1,
+      tier2: skuPriceOverrides?.tier2 ?? options?.priceOverrides?.tier2 ?? autoPrices.tier2,
+      tier3: skuPriceOverrides?.tier3 ?? options?.priceOverrides?.tier3 ?? autoPrices.tier3,
+    };
 
-  // === E2:E4 重量 (表二跳过) ===
-  if (!options?.skipPhysicalInfo) {
-    ws.getCell('E2').value = parseFloat(info.weight) || '';
+    // 属性图：收集到 pendingImages，在所有行操作和合并完成后统一插入
+    const attrBlob = allAttrBlobs[skuIdx] || null;
+    if (attrBlob) {
+      pendingImages.push({ blob: attrBlob, range: `A${startRow}:A${endRow}` });
+    } else {
+      console.warn(`[属性图] SKU ${skuIdx} 无属性图blob (allAttrBlobs长度:${allAttrBlobs.length})`);
+    }
+
+    // 多SKU: 合并新增行的单元格
+    if (isMulti && skuIdx > 0) {
+      ws.mergeCells(`A${startRow}:A${endRow}`);
+      ws.mergeCells(`B${startRow}:B${endRow}`);
+      ws.mergeCells(`C${startRow}:C${endRow}`);
+      ws.mergeCells(`E${startRow}:E${endRow}`);
+    }
+
+    ws.getCell(`B${startRow}`).value = skuInfo.productCode;
+    ws.getCell(`C${startRow}`).value = skuInfo.productName || '';
+
+    const costValue = parseFloat(skuInfo.costPrice) || 0;
+    ws.getCell(`D${startRow}`).value = costValue;
+    ws.getCell(`D${startRow + 1}`).value = costValue;
+    ws.getCell(`D${startRow + 2}`).value = costValue;
+
+    if (!options?.skipPhysicalInfo) {
+      ws.getCell(`E${startRow}`).value = parseFloat(skuInfo.weight) || '';
+      ws.getCell(`G${startRow}`).value = parseFloat(skuInfo.packageLength) || '';
+      ws.getCell(`G${startRow + 1}`).value = parseFloat(skuInfo.packageWidth) || '';
+      ws.getCell(`G${startRow + 2}`).value = parseFloat(skuInfo.packageHeight) || '';
+    }
+
+    if (skuInfo.material) {
+      ws.getCell(`H${startRow}`).value = skuInfo.material;
+    }
+
+    ws.getCell(`M${startRow}`).value = prices.tier3;
+    ws.getCell(`M${startRow + 1}`).value = prices.tier2;
+    ws.getCell(`M${startRow + 2}`).value = prices.tier1;
+
+    const profitRate = (price: number) => price > 0 ? Math.round((1 - costValue / price) * 10000) / 10000 : 0;
+    ws.getCell(`N${startRow}`).value = { formula: `1-(D${startRow}/M${startRow})`, result: profitRate(prices.tier3) };
+    ws.getCell(`N${startRow + 1}`).value = { formula: `1-(D${startRow + 1}/M${startRow + 1})`, result: profitRate(prices.tier2) };
+    ws.getCell(`N${startRow + 2}`).value = { formula: `1-(D${startRow + 2}/M${startRow + 2})`, result: profitRate(prices.tier1) };
   }
 
-  // === G2,G3,G4 包装尺寸 (长/宽/高) (表二跳过) ===
-  if (!options?.skipPhysicalInfo) {
-    ws.getCell('G2').value = parseFloat(info.packageLength) || '';
-    ws.getCell('G3').value = parseFloat(info.packageWidth) || '';
-    ws.getCell('G4').value = parseFloat(info.packageHeight) || '';
+  // 共享内容（按偏移量填写）
+  const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
+  const firstInfo = allInfos[0];
+
+  // 参考标题/关键词/参考链接：每个SKU一行
+  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
+    const skuInfo = allInfos[skuIdx];
+    const titleRow = 7 + offset + skuIdx;
+    ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
+    ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
+    ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
+    ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
   }
 
-  // === H2:H4 材质 (更新默认值) ===
-  if (info.material) {
-    ws.getCell('H2').value = info.material;
+  // 调整后的偏移量（参考标题额外行导致后续行下移）
+  const titleExtraOffset = isMulti ? (numSkus - 1) : 0;
+  const adjustedOffset = offset + titleExtraOffset;
+
+  ws.getCell(`A${9 + adjustedOffset}`).value = `1、${useCode}-1`;
+  ws.getCell(`A${14 + adjustedOffset}`).value = firstInfo.material || '';
+  ws.getCell(`B${15 + adjustedOffset}`).value = firstInfo.category || '';
+  ws.getCell(`B${16 + adjustedOffset}`).value = firstInfo.theme || '';
+  ws.getCell(`B${17 + adjustedOffset}`).value = firstInfo.keywords || '';
+  // 主卖颜色：各SKU颜色用逗号拼接
+  const allColors = allInfos.map(info => info.mainColor).filter(c => c && c.trim());
+  ws.getCell(`B${18 + adjustedOffset}`).value = allColors.join('，') || '';
+
+  // 所有行操作和合并完成后，统一插入属性图
+  for (const img of pendingImages) {
+    try {
+      const imgBuffer = await img.blob.arrayBuffer();
+      const blobName = (img.blob as File).name || '';
+      const isPng = img.blob.type.includes('png') || /\.png$/i.test(blobName);
+      const ext = isPng ? 'png' : 'jpeg';
+      const imageId = workbook.addImage({ buffer: new Uint8Array(imgBuffer), extension: ext as any });
+      ws.addImage(imageId, img.range);
+    } catch (imgErr) {
+      console.error(`[属性图] 插入失败:`, imgErr);
+    }
   }
-
-  // === M2,M3,M4 三档零售价 (从低到高: 40% / 45% / 50%) ===
-  ws.getCell('M2').value = prices.tier3;  // 最低价 (40%利润率)
-  ws.getCell('M3').value = prices.tier2;  // 中间价 (45%利润率)
-  ws.getCell('M4').value = prices.tier1;  // 最高价 (50%利润率)
-
-  // === N2,N3,N4 利润率公式 =1-(D/M)，同时写入预计算结果 ===
-  const profitRate = (price: number) => price > 0 ? Math.round((1 - costValue / price) * 10000) / 10000 : 0;
-  ws.getCell('N2').value = { formula: '1-(D2/M2)', result: profitRate(prices.tier3) };
-  ws.getCell('N3').value = { formula: '1-(D3/M3)', result: profitRate(prices.tier2) };
-  ws.getCell('N4').value = { formula: '1-(D4/M4)', result: profitRate(prices.tier1) };
-
-  // === A7:C7 参考标题 ===
-  ws.getCell('A7').value = info.competitorTitle || '';
-
-  // === D7 字符长度公式 =LEN(A7)，同时写入预计算结果 ===
-  ws.getCell('D7').value = { formula: 'LEN(A7)', result: (info.competitorTitle || '').length };
-
-  // === E7 关键词 ===
-  ws.getCell('E7').value = info.keywords || '';
-
-  // === F7 相关链接 ===
-  ws.getCell('F7').value = info.relatedLink || '';
-
-  // === A9: "1、-1" → "1、商品编码-1" ===
-  ws.getCell('A9').value = `1、${productCode}-1`;
-
-  // === A14 商品材质 ===
-  ws.getCell('A14').value = info.material || '';
-
-  // === B15 商品品类 (核心卖点行) ===
-  ws.getCell('B15').value = info.category || '';
-
-  // === B16 主题 ===
-  ws.getCell('B16').value = info.theme || '';
-
-  // === B17 关键词 ===
-  ws.getCell('B17').value = info.keywords || '';
-
-  // === B18 主卖颜色 ===
-  ws.getCell('B18').value = info.mainColor || '';
 
   const buffer = await workbook.xlsx.writeBuffer();
   return {
@@ -153,59 +424,108 @@ export async function fillSPSheet(
 export async function fillTable3(
   templateBuffer: ArrayBuffer,
   info: ProductInfo,
-  outputName: string
+  outputName: string,
+  options?: {
+    multiInfos?: ProductInfo[];
+    mergedCode?: string;
+  }
 ): Promise<TableFillResult> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(templateBuffer);
+
+  const isMulti = options?.multiInfos && options.multiInfos.length > 1;
+  const allInfos = isMulti ? options.multiInfos! : [info];
+  const numSkus = allInfos.length;
+  const offset = numSkus - 1; // 表三每组占1行，偏移量 = numSkus - 1
 
   // === sku信息 工作表 ===
   const wsSku = workbook.getWorksheet('sku信息');
   if (!wsSku) throw new Error('sku信息 工作表不存在');
 
-  const costValue = parseFloat(info.costPrice) || 0;
+  // 辅助函数：复制一行的所有单元格内容和样式到目标行
+  const copyTableRow = (ws: ExcelJS.Worksheet, srcRow: number, tgtRow: number) => {
+    const src = ws.getRow(srcRow);
+    const tgt = ws.getRow(tgtRow);
+    src.eachCell({ includeEmpty: true }, (cell: any, colNum: number) => {
+      const tgtCell = tgt.getCell(colNum);
+      tgtCell.value = cell.value;
+      const srcStyle = cell.style;
+      if (srcStyle) {
+        const styleObj: any = {};
+        if (srcStyle.font) styleObj.font = srcStyle.font;
+        if (srcStyle.alignment) styleObj.alignment = srcStyle.alignment;
+        if (srcStyle.border) styleObj.border = srcStyle.border;
+        if (srcStyle.fill) styleObj.fill = srcStyle.fill;
+        if (cell.numFmt) styleObj.numFmt = cell.numFmt;
+        if (Object.keys(styleObj).length > 0) {
+          tgtCell.style = styleObj;
+        }
+      }
+    });
+    if (src.height) {
+      tgt.height = src.height;
+    }
+  };
 
-  // A2: SKU
-  wsSku.getCell('A2').value = info.productCode;
-  // B2: 中文名
-  wsSku.getCell('B2').value = info.productName || '';
-  // C2: 英文属性
-  wsSku.getCell('C2').value = info.englishAttribute || '';
-  // D2: 进货价
-  wsSku.getCell('D2').value = costValue;
-  // E2: 克重
-  wsSku.getCell('E2').value = parseFloat(info.weight) || '';
-  // K2: 长, L2: 宽, M2: 高
-  wsSku.getCell('K2').value = parseFloat(info.packageLength) || '';
-  wsSku.getCell('L2').value = parseFloat(info.packageWidth) || '';
-  wsSku.getCell('M2').value = parseFloat(info.packageHeight) || '';
-  // F2-R2 已有公式和预设值, 保持不变
+  // 多SKU: 为每个额外SKU插入1行
+  if (isMulti) {
+    const rowsToAdd = numSkus - 1;
+    wsSku.spliceRows(3, 0, ...Array(rowsToAdd).fill(undefined));
+    for (let i = 1; i < numSkus; i++) {
+      copyTableRow(wsSku, 2, 2 + i);
+    }
+  }
+
+  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
+    const skuInfo = allInfos[skuIdx];
+    const row = 2 + skuIdx;
+    const costValue = parseFloat(skuInfo.costPrice) || 0;
+
+    wsSku.getCell(`A${row}`).value = skuInfo.productCode;
+    wsSku.getCell(`B${row}`).value = skuInfo.productName || '';
+    wsSku.getCell(`C${row}`).value = skuInfo.englishAttribute || '';
+    wsSku.getCell(`D${row}`).value = costValue;
+    wsSku.getCell(`E${row}`).value = parseFloat(skuInfo.weight) || '';
+    wsSku.getCell(`K${row}`).value = parseFloat(skuInfo.packageLength) || '';
+    wsSku.getCell(`L${row}`).value = parseFloat(skuInfo.packageWidth) || '';
+    wsSku.getCell(`M${row}`).value = parseFloat(skuInfo.packageHeight) || '';
+  }
 
   // === 产品信息 工作表 ===
   const wsProduct = workbook.getWorksheet('产品信息');
   if (!wsProduct) throw new Error('产品信息 工作表不存在');
 
-  // A2:C2 参考标题
-  wsProduct.getCell('A2').value = info.competitorTitle || '';
-  // === D2 字符长度公式 =LEN(A2)，同时写入预计算结果 ===
-  wsProduct.getCell('D2').value = { formula: 'LEN(A2)', result: (info.competitorTitle || '').length };
-  // E2 关键词
-  wsProduct.getCell('E2').value = info.keywords || '';
-  // F2 相关链接
-  wsProduct.getCell('F2').value = info.relatedLink || '';
+  // 多SKU: 为每个额外SKU插入1行
+  if (isMulti) {
+    const rowsToAdd = numSkus - 1;
+    wsProduct.spliceRows(3, 0, ...Array(rowsToAdd).fill(undefined));
+    for (let i = 1; i < numSkus; i++) {
+      copyTableRow(wsProduct, 2, 2 + i);
+    }
+  }
 
-  // A4: "1、-1" → "1、商品编码-1"
-  wsProduct.getCell('A4').value = `1、${info.productCode}-1`;
+  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
+    const skuInfo = allInfos[skuIdx];
+    const row = 2 + skuIdx;
 
-  // A9 商品材质
-  wsProduct.getCell('A9').value = info.material || '';
-  // B10 商品品类 (核心卖点行)
-  wsProduct.getCell('B10').value = info.category || '';
-  // B11 主题
-  wsProduct.getCell('B11').value = info.theme || '';
-  // B12 关键词
-  wsProduct.getCell('B12').value = info.keywords || '';
-  // B13 主卖颜色
-  wsProduct.getCell('B13').value = info.mainColor || '';
+    wsProduct.getCell(`A${row}`).value = skuInfo.competitorTitle || '';
+    wsProduct.getCell(`D${row}`).value = { formula: `LEN(A${row})`, result: (skuInfo.competitorTitle || '').length };
+    wsProduct.getCell(`E${row}`).value = skuInfo.keywords || '';
+    wsProduct.getCell(`F${row}`).value = skuInfo.relatedLink || '';
+  }
+
+  // 共享内容（按偏移量填写）
+  const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
+  const firstInfo = allInfos[0];
+
+  wsProduct.getCell(`A${4 + offset}`).value = `1、${useCode}-1`;
+  wsProduct.getCell(`A${9 + offset}`).value = firstInfo.material || '';
+  wsProduct.getCell(`B${10 + offset}`).value = firstInfo.category || '';
+  wsProduct.getCell(`B${11 + offset}`).value = firstInfo.theme || '';
+  wsProduct.getCell(`B${12 + offset}`).value = firstInfo.keywords || '';
+  // 主卖颜色：各SKU颜色用逗号拼接
+  const allColorsT3 = allInfos.map(info => info.mainColor).filter(c => c && c.trim());
+  wsProduct.getCell(`B${13 + offset}`).value = allColorsT3.join('，') || '';
 
   const buffer = await workbook.xlsx.writeBuffer();
   return {
@@ -220,44 +540,89 @@ export async function fillTable3(
 export async function fillAllTables(
   info: ProductInfo,
   attributeImageBlob: Blob | null,
-  priceOverrides?: PriceOverrides
+  priceOverrides?: PriceOverrides,
+  multiOptions?: {
+    multiInfos: ProductInfo[];
+    multiAttrBlobs: (Blob | null)[];
+    multiPriceOverrides?: PriceOverrides[];
+  }
 ): Promise<TableFillResult[]> {
   const results: TableFillResult[] = [];
 
+  const isMulti = multiOptions && multiOptions.multiInfos.length > 1;
+  const mergedCode = isMulti
+    ? generateMergedSkuName(multiOptions.multiInfos.map(p => p.productCode).filter(c => c.trim()))
+    : info.productCode;
+
   // 加载模板
-  const [buf1, buf2, buf3] = await Promise.all([
-    loadTemplate('表一'),
-    loadTemplate('表二'),
-    loadTemplate('表三'),
-  ]);
+  let buf1: ArrayBuffer, buf2: ArrayBuffer, buf3: ArrayBuffer;
+  try {
+    [buf1, buf2, buf3] = await Promise.all([
+      loadTemplate('表一'),
+      loadTemplate('表二'),
+      loadTemplate('表三'),
+    ]);
+  } catch (e: any) {
+    throw new Error(`模板加载失败: ${e.message}`);
+  }
 
-  // 填写表一: 商品编码-SP (填写重量和包装尺寸)
-  const result1 = await fillSPSheet(
-    buf1,
-    info,
-    attributeImageBlob,
-    `${info.productCode}-SP`,
-    { skipPhysicalInfo: false, priceOverrides }
-  );
-  results.push(result1);
+  // 填写表一: 合并编码-SP (填写重量和包装尺寸)
+  try {
+    const result1 = await fillSPSheet(
+      buf1,
+      info,
+      attributeImageBlob,
+      `${mergedCode}-SP`,
+      {
+        skipPhysicalInfo: false,
+        priceOverrides,
+        multiInfos: isMulti ? multiOptions!.multiInfos : undefined,
+        multiAttrBlobs: isMulti ? multiOptions!.multiAttrBlobs : undefined,
+        mergedCode: isMulti ? mergedCode : undefined,
+        multiPriceOverrides: isMulti ? multiOptions!.multiPriceOverrides : undefined,
+      }
+    );
+    results.push(result1);
+  } catch (e: any) {
+    throw new Error(`表一填写失败: ${e.message}`);
+  }
 
-  // 填写表二: 商品编码-S (不填写重量和包装尺寸)
-  const result2 = await fillSPSheet(
-    buf2,
-    info,
-    attributeImageBlob,
-    `${info.productCode}-S`,
-    { skipPhysicalInfo: true, priceOverrides }
-  );
-  results.push(result2);
+  // 填写表二: 合并编码-S (不填写重量和包装尺寸)
+  try {
+    const result2 = await fillSPSheet(
+      buf2,
+      info,
+      attributeImageBlob,
+      `${mergedCode}-S`,
+      {
+        skipPhysicalInfo: true,
+        priceOverrides,
+        multiInfos: isMulti ? multiOptions!.multiInfos : undefined,
+        multiAttrBlobs: isMulti ? multiOptions!.multiAttrBlobs : undefined,
+        mergedCode: isMulti ? mergedCode : undefined,
+        multiPriceOverrides: isMulti ? multiOptions!.multiPriceOverrides : undefined,
+      }
+    );
+    results.push(result2);
+  } catch (e: any) {
+    throw new Error(`表二填写失败: ${e.message}`);
+  }
 
-  // 填写表三: 商品编码-商品品类-全平台-刊登资料
-  const result3 = await fillTable3(
-    buf3,
-    info,
-    `${info.productCode}-${info.category || '未分类'}-全平台-刊登资料`
-  );
-  results.push(result3);
+  // 填写表三: 合并编码-商品品类-全平台-刊登资料
+  try {
+    const result3 = await fillTable3(
+      buf3,
+      info,
+      `${mergedCode}-${info.category || '未分类'}-全平台-刊登资料`,
+      {
+        multiInfos: isMulti ? multiOptions!.multiInfos : undefined,
+        mergedCode: isMulti ? mergedCode : undefined,
+      }
+    );
+    results.push(result3);
+  } catch (e: any) {
+    throw new Error(`表三填写失败: ${e.message}`);
+  }
 
   return results;
 }

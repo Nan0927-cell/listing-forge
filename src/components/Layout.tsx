@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { useStore, STEPS } from '@/store/useStore';
-import { cn } from '@/lib/utils';
+import { cn, generateMergedSkuName } from '@/lib/utils';
 import { AlertTriangle, X, History } from 'lucide-react';
 import { useState } from 'react';
 import ProgressOverlay from './ProgressOverlay';
@@ -8,11 +8,16 @@ import HistoryPanel from './HistoryPanel';
 
 export default function Layout() {
   const location = useLocation();
-  const { productInfo, stepStatuses, error, setError } = useStore();
+  const { productInfo, stepStatuses, error, setError, listingMode, multiProductInfos } = useStore();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
   const currentIndex = STEPS.findIndex((s) => s.path === location.pathname);
+
+  const isMulti = listingMode !== 'single' && multiProductInfos.length > 1;
+  const displayCode = isMulti
+    ? generateMergedSkuName(multiProductInfos.map(p => p.productCode).filter(c => c.trim()))
+    : productInfo.productCode;
 
   return (
     <div className="min-h-screen bg-bone">
@@ -61,7 +66,7 @@ export default function Layout() {
                 商品编号 / PRODUCT
               </div>
               <div className="font-mono text-xs font-bold text-bone">
-                {productInfo.productCode || '—'}
+                {displayCode || '—'}
               </div>
             </div>
             <div className="h-8 w-px bg-bone/20" />
@@ -73,6 +78,16 @@ export default function Layout() {
                 {productInfo.styleCode || '—'}
               </div>
             </div>
+            {listingMode !== 'single' && (
+              <div className={cn(
+                'border px-2 py-0.5 font-mono text-[10px] font-bold',
+                listingMode === 'multiA'
+                  ? 'border-flame/50 text-flame'
+                  : 'border-steel/50 text-steel'
+              )}>
+                {listingMode === 'multiA' ? '多SKU·同款' : '多SKU·通用'}
+              </div>
+            )}
             <div className="border border-bone/30 px-2 py-0.5 font-mono text-[10px] text-bone/70">
               v3.0
             </div>

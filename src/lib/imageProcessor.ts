@@ -120,33 +120,87 @@ export async function resizeTo750(file: File | Blob): Promise<Blob> {
 
 // ===================== 自动分类图片 =====================
 
-export function autoClassifyImages(
+// 单组分类逻辑（单SKU或多SKU的某一组）
+function classifySingleGroup(
   files: ScannedFile[],
   styleCode: string,
-  productCode: string
-): ClassifiedImage[] {
+  productCode: string,
+  allCodes: string[],
+  startOrder: number,
+  groupIndex: number = 0,
+  groupFolderName?: string
+): { result: ClassifiedImage[]; nextOrder: number; attrImages: ClassifiedImage[] } {
   const result: ClassifiedImage[] = [];
-  let order = 1;
+  let order = startOrder;
 
-  // 按文件名排序
   const sorted = [...files].sort((a, b) =>
     a.name.localeCompare(b.name, 'zh-CN', { numeric: true })
   );
 
-  // 尝试根据文件名关键词分类
-  const categorized: { file: ScannedFile; category: ImageCategory }[] = [];
+  const categorized: { file: ScannedFile; category: ImageCategory; attrCode?: string }[] = [];
 
   for (const file of sorted) {
     const lowerName = file.name.toLowerCase();
 
-    // 检查是否为属性图（文件名只包含商品编码，无序号）
-    const baseName = file.name.replace(/\.[^.]+$/, ''); // 去扩展名
-    if (baseName === productCode || baseName === productCode.replace(/-/g, '_')) {
-      categorized.push({ file, category: 'attribute' });
+    const baseName = file.name.replace(/\.[^.]+$/, '');
+    let matchedCode: string | null = null;
+
+    // 1. 精确匹配（大小写敏感）
+    for (const code of allCodes) {
+      if (baseName === code || baseName === code.replace(/-/g, '_')) {
+        matchedCode = code;
+        break;
+      }
+    }
+    // 2. 精确匹配（大小写不敏感）
+    if (!matchedCode) {
+      for (const code of allCodes) {
+        const lowerBase = baseName.toLowerCase();
+        const lowerCode = code.toLowerCase();
+        const lowerCodeUnd = code.replace(/-/g, '_').toLowerCase();
+        if (lowerBase === lowerCode || lowerBase === lowerCodeUnd) {
+          matchedCode = code;
+          break;
+        }
+      }
+    }
+    // 3. 匹配组文件夹名
+    if (!matchedCode && groupFolderName) {
+      if (baseName === groupFolderName || baseName === groupFolderName.replace(/-/g, '_')) {
+        matchedCode = groupFolderName;
+      }
+    }
+    // 4. 关键词匹配：文件名包含"属性"或"attribute"
+    if (!matchedCode && /属性|attribute/i.test(lowerName)) {
+      // 尝试关联到具体SKU编码
+      for (const code of allCodes) {
+        if (baseName.includes(code) || baseName.includes(code.replace(/-/g, '_'))) {
+          matchedCode = code;
+          break;
+        }
+      }
+      if (!matchedCode) {
+        matchedCode = groupFolderName || productCode;
+      }
+    }
+    // 5. 宽松前缀匹配：文件名以SKU编码开头，后缀不是纯数字序列
+    if (!matchedCode) {
+      for (const code of allCodes) {
+        if (baseName.startsWith(code)) {
+          const suffix = baseName.slice(code.length);
+          // 排除序列编号后缀（如 -01, _02, 03）
+          if (!/^[-_]?\d+$/.test(suffix)) {
+            matchedCode = code;
+            break;
+          }
+        }
+      }
+    }
+    if (matchedCode) {
+      categorized.push({ file, category: 'attribute', attrCode: matchedCode });
       continue;
     }
 
-    // 关键词匹配
     if (/主图|首图|main|primary|cover/i.test(lowerName)) {
       categorized.push({ file, category: 'main' });
     } else if (/场景|效果|scene|effect/i.test(lowerName)) {
@@ -162,28 +216,16 @@ export function autoClassifyImages(
     }
   }
 
-  // 如果没有关键词匹配，按顺序自动分类
   const hasMain = categorized.some((c) => c.category === 'main');
   if (!hasMain) {
-    // 重新按顺序分类
     let mainCount = 0;
     let sceneCount = 0;
     let detailGridCount = 0;
     let detailCount = 0;
-    let whiteBgCount = 0;
 
     for (const item of categorized) {
-      if (item.category === 'attribute') {
-        result.push({
-          file: item.file,
-          category: 'attribute',
-          newName: productCode,
-          order: 0,
-        });
-        continue;
-      }
+      if (item.category === 'attribute') continue;
 
-      // 按顺序分配类别
       if (mainCount < 1) {
         item.category = 'main';
         mainCount++;
@@ -198,63 +240,128 @@ export function autoClassifyImages(
         detailCount++;
       } else {
         item.category = 'white-bg';
-        whiteBgCount++;
       }
     }
   }
 
-  // 生成新文件名
-  const categoryOrder: ImageCategory[] = [
-    'main',
-    'scene',
-    'detail-grid',
-    'detail',
-    'white-bg',
-  ];
-
-  const categoryCounts: Record<string, number> = {};
+  // 先处理非属性图（顺序编号），属性图收集起来单独返回
   for (const item of categorized) {
-    if (item.category === 'attribute') {
-      if (!result.find((r) => r.file === item.file)) {
-        result.push({
-          file: item.file,
-          category: 'attribute',
-          newName: productCode,
-          order: 0,
-        });
-      }
-      continue;
-    }
+    if (item.category === 'attribute') continue;
 
-    if (!categoryCounts[item.category]) {
-      categoryCounts[item.category] = 0;
-    }
-    categoryCounts[item.category]++;
-
-    const catIndex = categoryOrder.indexOf(item.category);
-    // 计算全局序号
-    let globalOrder = 0;
-    for (let i = 0; i < catIndex; i++) {
-      globalOrder += categoryCounts[categoryOrder[i]] || 0;
-    }
-    const localIndex = categoryCounts[item.category];
-    globalOrder = order++;
-
-    // 保留原扩展名
     const ext = item.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-    const newName = `${styleCode}-00-${padZero(globalOrder)}.${ext}`;
-
-    if (!result.find((r) => r.file === item.file)) {
-      result.push({
-        file: item.file,
-        category: item.category,
-        newName,
-        order: globalOrder,
-      });
-    }
+    const newName = `${styleCode}-00-${padZero(order)}.${ext}`;
+    result.push({
+      file: item.file,
+      category: item.category,
+      newName,
+      order: order,
+      groupIndex,
+    });
+    order++;
   }
 
-  return result.sort((a, b) => a.order - b.order);
+  // 收集属性图，由调用方统一放到最末尾
+  const attrImages: ClassifiedImage[] = [];
+  for (const item of categorized) {
+    if (item.category !== 'attribute') continue;
+    const ext = item.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+    attrImages.push({
+      file: item.file,
+      category: 'attribute',
+      newName: `${item.attrCode || productCode}.${ext}`,
+      order: 0,
+      groupIndex,
+    });
+  }
+
+  return { result, nextOrder: order, attrImages };
+}
+
+export function autoClassifyImages(
+  files: ScannedFile[],
+  styleCode: string,
+  productCode: string,
+  multiProductCodes?: string[]
+): ClassifiedImage[] {
+  const allCodes = multiProductCodes && multiProductCodes.length > 0
+    ? multiProductCodes
+    : [productCode];
+
+  // 按路径第一段（SKU子文件夹名）分组
+  const groupOrder: string[] = [];
+  const groups = new Map<string, ScannedFile[]>();
+
+  for (const file of files) {
+    let groupName: string | null = null;
+    if (file.path) {
+      const pathParts = file.path.split('/');
+      if (pathParts.length > 1) {
+        groupName = pathParts[0];
+      }
+    }
+    if (groupName === null) {
+      const baseName = file.name.replace(/\.[^.]+$/, '');
+      const matched = allCodes.find(code => baseName === code || baseName === code.replace(/-/g, '_'));
+      if (matched) groupName = matched;
+    }
+    if (groupName === null) {
+      groupName = '_default';
+    }
+
+    if (!groups.has(groupName)) {
+      groups.set(groupName, []);
+      groupOrder.push(groupName);
+    }
+    groups.get(groupName)!.push(file);
+  }
+
+  // 只有一组时按单SKU处理
+  if (groupOrder.length <= 1) {
+    const groupName = groupOrder[0] || '_default';
+    const groupFiles = groups.get(groupName) || files;
+    const groupCode = allCodes.includes(groupName) ? groupName : productCode;
+    const { result, attrImages } = classifySingleGroup(
+      groupFiles, styleCode, groupCode, allCodes, 1, 0, groupName
+    );
+    return [...result, ...attrImages];
+  }
+
+  // 多组：按allCodes顺序排列，未匹配的组保持原序
+  const originalOrder = new Map<string, number>();
+  groupOrder.forEach((name, i) => originalOrder.set(name, i));
+
+  groupOrder.sort((a, b) => {
+    const idxA = allCodes.indexOf(a);
+    const idxB = allCodes.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0);
+  });
+
+  // 按组顺序处理，组间编号接续，属性图统一收集
+  let globalOrder = 1;
+  let groupIdx = 0;
+  const result: ClassifiedImage[] = [];
+  const allAttrImages: ClassifiedImage[] = [];
+
+  for (const groupName of groupOrder) {
+    const groupFiles = groups.get(groupName)!;
+    const groupCode = allCodes.includes(groupName) ? groupName : (allCodes[groupIdx] || groupName);
+
+    const { result: groupResult, nextOrder, attrImages } = classifySingleGroup(
+      groupFiles, styleCode, groupCode, allCodes, globalOrder, groupIdx, groupName
+    );
+    result.push(...groupResult);
+    allAttrImages.push(...attrImages);
+    globalOrder = nextOrder;
+    groupIdx++;
+  }
+
+  // 所有属性图统一放在最末尾
+  result.push(...allAttrImages);
+
+  return result;
 }
 
 // ===================== 生成缩略图URL =====================

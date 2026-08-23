@@ -101,14 +101,40 @@ export async function scanDirectory(
     }
   }
 
+  // 检查根目录下是否有"视频"文件夹
+  const videoFolder = allFolders.find(f => f.name === '视频' || f.name.toLowerCase().replace(/\s/g, '') === 'video');
+  if (videoFolder) {
+    try {
+      for await (const entry of videoFolder.handle.values()) {
+        if (entry.kind === 'file') {
+          const file = await entry.getFile();
+          if (isVideoFile(entry.name)) {
+            result.videos.push({
+              name: entry.name,
+              file,
+              path: `${videoFolder.name}/${entry.name}`,
+              size: file.size,
+              type: file.type,
+            });
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('无法扫描视频文件夹', e);
+    }
+  }
+
   // 如果没有找到1200/1688/ozon文件夹，但有其他文件夹，尝试在子文件夹中查找
+  // 支持多SKU结构：父文件夹下每个SKU子文件夹内含1200/1688/ozon/视频
   if (result.folder1200.length === 0 && result.folder1688.length === 0) {
     for (const folder of result.otherFolders) {
       try {
+        let has1200 = false;
+        let has1688 = false;
         for await (const subEntry of folder.handle.values()) {
           if (subEntry.kind === 'directory') {
             const lowerName = subEntry.name.toLowerCase().replace(/\s/g, '');
-            if (lowerName === '1200' || lowerName === '1688' || lowerName === 'ozon') {
+            if (lowerName === '1200' || lowerName === '1688' || lowerName === 'ozon' || lowerName === '视频' || lowerName === 'video') {
               const subFiles: ScannedFile[] = [];
               for await (const fileEntry of subEntry.values()) {
                 if (fileEntry.kind === 'file') {
@@ -123,14 +149,49 @@ export async function scanDirectory(
                 }
               }
               if (lowerName === '1200') {
-                result.folder1200 = subFiles.filter((f) => isImageFile(f.name));
+                // 多SKU模式：追加而非覆盖，按完整路径去重
+                const images = subFiles.filter((f) => isImageFile(f.name));
+                const existingPaths = new Set(result.folder1200.map(f => f.path));
+                for (const img of images) {
+                  if (!existingPaths.has(img.path)) {
+                    result.folder1200.push(img);
+                    existingPaths.add(img.path);
+                  }
+                }
+                has1200 = true;
               } else if (lowerName === '1688') {
-                result.folder1688 = subFiles.filter((f) => isImageFile(f.name));
+                const images = subFiles.filter((f) => isImageFile(f.name));
+                const existingPaths = new Set(result.folder1688.map(f => f.path));
+                for (const img of images) {
+                  if (!existingPaths.has(img.path)) {
+                    result.folder1688.push(img);
+                    existingPaths.add(img.path);
+                  }
+                }
+                has1688 = true;
               } else if (lowerName === 'ozon') {
-                result.ozonFiles = subFiles;
+                const existingPaths = new Set(result.ozonFiles.map(f => f.path));
+                for (const f of subFiles) {
+                  if (!existingPaths.has(f.path)) {
+                    result.ozonFiles.push(f);
+                    existingPaths.add(f.path);
+                  }
+                }
+              } else if (lowerName === '视频' || lowerName === 'video') {
+                const existingPaths = new Set(result.videos.map(f => f.path));
+                for (const f of subFiles) {
+                  if (isVideoFile(f.name) && !existingPaths.has(f.path)) {
+                    result.videos.push(f);
+                    existingPaths.add(f.path);
+                  }
+                }
               }
             }
           }
+        }
+        // 如果该子文件夹包含1200或1688，则视为SKU文件夹
+        if (has1200 || has1688) {
+          // SKU文件夹已处理
         }
       } catch (e) {
         console.warn(`无法扫描子文件夹: ${folder.name}`, e);

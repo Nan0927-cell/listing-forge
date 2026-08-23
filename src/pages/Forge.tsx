@@ -4,7 +4,7 @@ import { useStore } from '@/store/useStore';
 import { resizeTo800, resizeTo750 } from '@/lib/imageProcessor';
 import { writeFileToDir, createDirectory, renameDirectory } from '@/lib/fileSystem';
 import type { ProcessResult } from '@/types';
-import { cn } from '@/lib/utils';
+import { cn, generateMergedSkuName } from '@/lib/utils';
 import {
   ChevronRight, Loader2, CheckCircle2, Circle, Play,
   Image as ImageIcon, Crop, FolderInput, Video, FileBox,
@@ -26,13 +26,20 @@ export default function Forge() {
     inputDirHandle, processResult, setProcessResult,
     setStepStatus, setError,
     showProgress, updateProgress, hideProgress,
+    listingMode, multiProductInfos,
   } = useStore();
+
+  // 多SKU合并编码
+  const isMulti = listingMode !== 'single' && multiProductInfos.length > 1;
+  const mergedCode = isMulti
+    ? generateMergedSkuName(multiProductInfos.map(p => p.productCode).filter(c => c.trim()))
+    : productInfo.productCode;
 
   const [steps, setSteps] = useState<Step[]>([
     { id: 'rename', label: '重命名1200图片', labelEn: 'RENAME 1200', icon: <ImageIcon className="h-4 w-4" />, status: 'pending' },
     { id: 'resize800', label: '生成800x800方图', labelEn: 'RESIZE 800', icon: <Crop className="h-4 w-4" />, status: 'pending' },
     { id: 'resize750', label: '生成750x757图', labelEn: 'RESIZE 750', icon: <Crop className="h-4 w-4" />, status: 'pending' },
-    { id: 'pair1688', label: '处理1688配对图', labelEn: 'PAIR 1688', icon: <FolderInput className="h-4 w-4" />, status: 'pending' },
+    { id: 'pair1688', label: '处理1688配对(SKU分组)', labelEn: 'PAIR 1688', icon: <FolderInput className="h-4 w-4" />, status: 'pending' },
     { id: 'video', label: '创建视频文件夹', labelEn: 'VIDEO', icon: <Video className="h-4 w-4" />, status: 'pending' },
     { id: 'ozon', label: '重命名OZON文件夹', labelEn: 'OZON', icon: <FileBox className="h-4 w-4" />, status: 'pending' },
   ]);
@@ -64,8 +71,8 @@ export default function Forge() {
       folder1200Renamed: [],
       folder800: [],
       folder750: [],
-      folder1688Renamed: productInfo.productCode,
-      videoFolderName: `${productInfo.productCode}视频`,
+      folder1688Renamed: mergedCode,
+      videoFolderName: `${mergedCode}视频`,
       ozonRenamed: null,
       attributeImages: [],
     };
@@ -105,28 +112,13 @@ export default function Forge() {
       }
       updateStep('resize750', 'done', `${result.folder750.length} 张`);
 
-      // 4. 处理1688配对
+      // 4. 处理1688配对（按SKU分组，配对图在导出时直接从pairs1688读取）
       updateStep('pair1688', 'processing');
-      // 配对图重命名: 陈悦组方图, 陈悦组首图, 杜青组方图, 杜青组首图
       for (const pair of pairs1688) {
-        if (pair.squareImage) {
-          progressCount++;
-          updateProgress(progressCount, `处理1688: ${pair.groupName}方图`);
-          const ext = pair.squareImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-          const newName = `${pair.groupName}方图.${ext}`;
-          const blob = await pair.squareImage.file.arrayBuffer();
-          result.folder800.push({ name: newName, blob: new Blob([blob]) });
-        }
-        if (pair.mainImage) {
-          progressCount++;
-          updateProgress(progressCount, `处理1688: ${pair.groupName}首图`);
-          const ext = pair.mainImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-          const newName = `${pair.groupName}首图.${ext}`;
-          const blob = await pair.mainImage.file.arrayBuffer();
-          result.folder800.push({ name: newName, blob: new Blob([blob]) });
-        }
+        progressCount++;
+        updateProgress(progressCount, `确认1688配对: ${pair.groupName}`);
       }
-      updateStep('pair1688', 'done', `${pairs1688.length} 组配对`);
+      updateStep('pair1688', 'done', `${pairs1688.length} 组SKU配对`);
 
       // 5. 视频文件夹
       updateStep('video', 'processing');

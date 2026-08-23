@@ -28,7 +28,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/" element={<Station />} />
-        <Route path="/classify" element={<Classify />} />
+      <Route path="/classify" element={<Classify />} />
         <Route path="/pair" element={<Pair />} />
         <Route path="/forge" element={<Forge />} />
         <Route

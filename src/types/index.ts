@@ -1,3 +1,6 @@
+// ===================== 刊登模式 =====================
+export type ListingMode = 'single' | 'multiA' | 'multiB';
+
 // ===================== 产品信息类型 =====================
 export interface ProductInfo {
   productLine: 1 | 2 | 3;
@@ -60,13 +63,15 @@ export interface ClassifiedImage {
   category: ImageCategory;
   newName: string;     // 新文件名
   order: number;       // 顺序
+  groupIndex?: number; // 多SKU模式下的组索引（0-based）
 }
 
 // ===================== 1688配对类型 =====================
 export interface Pair1688 {
   squareImage: ScannedFile | null;  // 方图
   mainImage: ScannedFile | null;     // 首图
-  groupName: string;                 // 组名 (陈悦组/杜青组)
+  groupName: string;                 // 组名 (SKU编码)
+  groupIndex?: number;               // 组索引（用于多SKU导航）
 }
 
 // ===================== 处理结果 =====================
@@ -99,12 +104,18 @@ export interface ExportGroup {
   items: ExportItem[];
 }
 
+export interface ExportChild {
+  name: string;
+  blob?: Blob;              // 文件时有值
+  children?: ExportChild[]; // 文件夹时有值
+}
+
 export interface ExportItem {
   type: 'folder' | 'file';
   name: string;
   source: string;     // 来源描述
   blob?: Blob;        // 文件数据(如果是文件)
-  children?: { name: string; blob: Blob }[]; // 文件夹内的文件
+  children?: ExportChild[]; // 文件夹内的内容（支持嵌套子文件夹）
 }
 
 // ===================== 步骤状态 =====================

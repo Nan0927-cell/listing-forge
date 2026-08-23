@@ -71,3 +71,59 @@ export const THEME_OPTIONS = [
 export function genId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
+
+// ===================== 多SKU合并命名 =====================
+// 规则：
+// - 2个SKU：用&连接 (如 121&122)
+// - 3+个连续SKU：用~连接 (如 121~123)
+// - 3+个不连续SKU：用&连接 (如 121&122&124)
+// - 混合情况：连续段(3+)用~，其余用&，各段间用&连接
+export function generateMergedSkuName(productCodes: string[]): string {
+  if (productCodes.length === 0) return '';
+  if (productCodes.length === 1) return productCodes[0];
+
+  const parts = productCodes.map(code => {
+    const match = code.match(/^(.+)-(\d+)$/);
+    return {
+      prefix: match ? match[1] : code,
+      suffix: match ? parseInt(match[2]) : null,
+    };
+  });
+
+  const prefix = parts[0].prefix;
+  const numbers = parts.map(p => p.suffix).filter((n): n is number => n !== null);
+
+  if (numbers.length !== parts.length) {
+    return productCodes.join('&');
+  }
+
+  const sorted = [...new Set(numbers)].sort((a, b) => a - b);
+
+  const runs: number[][] = [];
+  let currentRun: number[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    if (sorted[i] === sorted[i - 1] + 1) {
+      currentRun.push(sorted[i]);
+    } else {
+      runs.push(currentRun);
+      currentRun = [sorted[i]];
+    }
+  }
+  runs.push(currentRun);
+
+  const nameParts = runs.map(run => {
+    if (run.length >= 3) {
+      return `${run[0]}~${run[run.length - 1]}`;
+    }
+    return run.join('&');
+  });
+
+  return `${prefix}-${nameParts.join('&')}`;
+}
+
+// 从款式编码和商品编码列表中提取合并命名
+export function getMergedCodeFromProducts(codes: string[], styleCode: string): string {
+  if (codes.length <= 1) return codes[0] || '';
+  return generateMergedSkuName(codes);
+}

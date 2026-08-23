@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
 import {
-  writeFileToDir, createDirectory, getOrCreateDir,
+  writeFileToDir, createDirectory, getOrCreateDir, removeEntry,
 } from '@/lib/fileSystem';
-import { cn } from '@/lib/utils';
-import type { ExportGroup, ExportItem } from '@/types';
+import { cn, generateMergedSkuName } from '@/lib/utils';
+import type { ExportGroup, ExportItem, ExportChild, Pair1688, ScannedFile } from '@/types';
 import {
   ChevronRight, ChevronDown, Loader2, CheckCircle2, FolderTree,
   Download, Folder, FileText, Image as ImageIcon,
@@ -20,7 +20,14 @@ export default function ExportPage() {
     outputDirHandle, outputDirName,
     setStepStatus, setError, resetAll,
     showProgress, updateProgress, hideProgress, addHistory,
+    listingMode, multiProductInfos,
   } = useStore();
+
+  // 多SKU合并编码
+  const isMulti = listingMode !== 'single' && multiProductInfos.length > 1;
+  const mergedCode = isMulti
+    ? generateMergedSkuName(multiProductInfos.map(p => p.productCode).filter(c => c.trim()))
+    : productInfo.productCode;
 
   const [exporting, setExporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -36,21 +43,110 @@ export default function ExportPage() {
     );
   }
 
-  const { productCode, category, productLine } = productInfo;
+  const baseInfo = isMulti ? multiProductInfos[0] : productInfo;
+  const { category, productLine } = baseInfo;
   const lineLabel = `产品线${productLine}`;
+
+  // 递归统计子项文件数
+  const countChildrenFiles = (children: ExportChild[]): number => {
+    return children.reduce((sum, child) => {
+      if (child.children) return sum + countChildrenFiles(child.children);
+      return sum + 1;
+    }, 0);
+  };
+
+  // 获取1200图片文件 (重命名后，包含属性图)
+  const get1200Files = (): ExportChild[] => {
+    return classifiedImages
+      .map(img => ({ name: img.newName, blob: img.file.file }));
+  };
+
+  // 获取1688配对图片文件 — 嵌套结构：按SKU分组，每组一个子文件夹，包含该SKU所有图片
+  const get1688Files = (): ExportChild[] => {
+    if (!scanResult) return [];
+    const children: ExportChild[] = [];
+    const pairedFiles = new Set<string>();
+
+    // 按文件路径分组1688图片（和Pair.tsx相同的逻辑）
+    const imgGroupMap = new Map<string, ScannedFile[]>();
+    for (const img of scanResult.folder1688) {
+      const pathParts = img.path.split('/');
+      const groupKey = pathParts.length > 2 ? pathParts[0] : 'default';
+      if (!imgGroupMap.has(groupKey)) imgGroupMap.set(groupKey, []);
+      imgGroupMap.get(groupKey)!.push(img);
+    }
+
+    const imgGroups = Array.from(imgGroupMap.entries()).map(([key, files], index) => ({
+      key,
+      files,
+      index,
+      skuCode: isMulti
+        ? (multiProductInfos[index]?.productCode || key)
+        : productInfo.productCode,
+    }));
+
+    // 按 groupIndex 分组配对
+    const pairGroupMap = new Map<number, Pair1688[]>();
+    for (const pair of pairs1688) {
+      const gi = pair.groupIndex ?? 0;
+      if (!pairGroupMap.has(gi)) pairGroupMap.set(gi, []);
+      pairGroupMap.get(gi)!.push(pair);
+    }
+
+    // 为每个图片组创建SKU子文件夹，包含所有图片
+    for (const imgGroup of imgGroups) {
+      const skuChildren: ExportChild[] = [];
+
+      // 添加配对图片（重命名：陈悦组方图.jpg / 杜青组首图.jpg ...）
+      const groupPairs = pairGroupMap.get(imgGroup.index) || [];
+      for (const pair of groupPairs) {
+        if (pair.squareImage) {
+          const ext = pair.squareImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+          skuChildren.push({ name: `${pair.groupName}方图.${ext}`, blob: pair.squareImage.file });
+          pairedFiles.add(pair.squareImage.name);
+        }
+        if (pair.mainImage) {
+          const ext = pair.mainImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+          skuChildren.push({ name: `${pair.groupName}首图.${ext}`, blob: pair.mainImage.file });
+          pairedFiles.add(pair.mainImage.name);
+        }
+      }
+
+      // 添加未配对的其他图片（保留原始名称）
+      for (const img of imgGroup.files) {
+        if (!pairedFiles.has(img.name)) {
+          skuChildren.push({ name: img.name, blob: img.file });
+        }
+      }
+
+      children.push({ name: imgGroup.skuCode, children: skuChildren });
+    }
+
+    return children;
+  };
+
+  // 获取视频文件
+  const getVideoFiles = (): ExportChild[] => {
+    return scanResult.videos.map(v => ({ name: v.name, blob: v.file }));
+  };
+
+  // 获取OZON文件
+  const getOzonFiles = (): ExportChild[] => {
+    return scanResult.ozonFiles.map(f => ({ name: f.name, blob: f.file }));
+  };
 
   // 构建导出结构
   const buildExportGroups = (): ExportGroup[] => {
     const groups: ExportGroup[] = [];
 
-    // 是否有1688文件夹
     const has1688 = scanResult.folder1688.length > 0;
 
     // 组1: 商品编码-S-产品线N (仅当有1688文件夹时生成)
     if (has1688) {
-      const group1Name = `${productCode}-S-${lineLabel}`;
+      const group1Name = `${mergedCode}-S-${lineLabel}`;
       const group1Items: ExportItem[] = [
-        { type: 'folder', name: productCode, source: '1688文件夹(配对图+其他图片)', children: get1688Files() },
+        // 1688文件夹：内含SKU子文件夹，替换已有同名文件夹
+        { type: 'folder', name: mergedCode, source: '1688文件夹(SKU分组)', children: get1688Files(), replaceIfExists: true as any },
         { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
       ];
       if (fillTables && tableResults[1]) {
@@ -61,7 +157,6 @@ export default function ExportPage() {
           blob: new Blob([tableResults[1].buffer]),
         });
       }
-      // 额外空白文件夹
       group1Items.push({ type: 'folder' as const, name: 'gprs实拍图', source: '空文件夹', children: [] });
       group1Items.push({ type: 'folder' as const, name: '包装图', source: '空文件夹', children: [] });
       groups.push({ folderName: group1Name, items: group1Items });
@@ -69,7 +164,7 @@ export default function ExportPage() {
 
     // 组2: 商品编码-品类-ozon-产品线N (仅当有ozon时)
     if (processResult.ozonRenamed && scanResult.ozonFiles.length > 0) {
-      const group2Name = `${productCode}-${category || '未分类'}-ozon-${lineLabel}`;
+      const group2Name = `${mergedCode}-${category || '未分类'}-ozon-${lineLabel}`;
       groups.push({
         folderName: group2Name,
         items: [
@@ -80,10 +175,10 @@ export default function ExportPage() {
     }
 
     // 组3: 商品编码-品类-刊登资料
-    const group3Name = `${productCode}-${category || '未分类'}-刊登资料`;
+    const group3Name = `${mergedCode}-${category || '未分类'}-刊登资料`;
     const group3Items: ExportItem[] = [
       { type: 'folder', name: '750', source: '750图片', children: processResult.folder750.map(f => ({ name: f.name, blob: f.blob })) },
-      { type: 'folder', name: '800', source: '800图片', children: processResult.folder800.filter(f => !f.name.includes('组')).map(f => ({ name: f.name, blob: f.blob })) },
+      { type: 'folder', name: '800', source: '800图片', children: processResult.folder800.map(f => ({ name: f.name, blob: f.blob })) },
       { type: 'folder', name: '1200', source: '1200图片', children: get1200Files() },
       { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
     ];
@@ -98,7 +193,7 @@ export default function ExportPage() {
     groups.push({ folderName: group3Name, items: group3Items });
 
     // 组4: 商品编码-PDD-产品线N
-    const group4Name = `${productCode}-PDD-${lineLabel}`;
+    const group4Name = `${mergedCode}-PDD-${lineLabel}`;
     const group4Items: ExportItem[] = [
       { type: 'folder', name: '1200', source: '1200图片', children: get1200Files() },
       { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
@@ -111,76 +206,40 @@ export default function ExportPage() {
         blob: new Blob([tableResults[0].buffer]),
       });
     }
-    // 额外空白文件夹
     group4Items.push({ type: 'folder' as const, name: '包装图', source: '空文件夹', children: [] });
     groups.push({ folderName: group4Name, items: group4Items });
 
     return groups;
   };
 
-  // 获取1200图片文件 (重命名后，包含属性图)
-  const get1200Files = () => {
-    return classifiedImages
-      .map(img => ({ name: img.newName, blob: img.file.file }));
-  };
-
-  // 获取1688配对图片文件 (重命名后) + 保留未配对的其他图片
-  const get1688Files = () => {
-    const files: { name: string; blob: Blob }[] = [];
-    // 已配对的图片使用新名称
-    // 命名规则：杜青组方图.jpg / 杜青组方图2.jpg / 陈悦组首图2.jpg ...
-    // 数字放在类型(方图/首图)后面
-    const pairedFiles = new Set<string>();
-    for (const pair of pairs1688) {
-      // 从组名中提取基础名称和序号，如 "杜青组2" → base="杜青组", num="2"
-      const m = pair.groupName.match(/^(.+组)(\d*)$/);
-      const base = m ? m[1] : pair.groupName;
-      const num = m && m[2] ? m[2] : '';
-      if (pair.squareImage) {
-        const ext = pair.squareImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        files.push({ name: `${base}方图${num}.${ext}`, blob: pair.squareImage.file });
-        pairedFiles.add(pair.squareImage.name);
-      }
-      if (pair.mainImage) {
-        const ext = pair.mainImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        files.push({ name: `${base}首图${num}.${ext}`, blob: pair.mainImage.file });
-        pairedFiles.add(pair.mainImage.name);
-      }
-    }
-    // 保留未配对的其他图片（使用原始名称）
-    if (scanResult) {
-      for (const img of scanResult.folder1688) {
-        if (!pairedFiles.has(img.name)) {
-          files.push({ name: img.name, blob: img.file });
-        }
-      }
-    }
-    return files;
-  };
-
-  // 获取视频文件
-  const getVideoFiles = () => {
-    return scanResult.videos.map(v => ({ name: v.name, blob: v.file }));
-  };
-
-  // 获取OZON文件
-  const getOzonFiles = () => {
-    return scanResult.ozonFiles.map(f => ({ name: f.name, blob: f.file }));
-  };
-
   const groups = buildExportGroups();
-  const totalItems = groups.reduce((sum, g) => sum + g.items.length, 0);
-  // 计算实际导出文件总数（包含子文件夹内的所有文件）
-  const totalExportFiles = groups.reduce(
-    (sum, g) =>
-      sum +
-      g.items.reduce(
-        (s, item) =>
-          item.type === 'folder' && item.children ? s + item.children.length : s + 1,
-        0
-      ),
-    0
-  );
+
+  // 递归统计导出文件总数
+  const countExportFiles = (items: ExportItem[]): number => {
+    return items.reduce((sum, item) => {
+      if (item.type === 'folder' && item.children) {
+        return sum + countChildrenFiles(item.children);
+      }
+      return sum + 1;
+    }, 0);
+  };
+
+  const totalExportFiles = groups.reduce((sum, g) => sum + countExportFiles(g.items), 0);
+
+  // 递归写入子项
+  const writeChildrenRecursive = async (dirHandle: any, children: ExportChild[]): Promise<number> => {
+    let count = 0;
+    for (const child of children) {
+      if (child.children) {
+        const subDir = await createDirectory(dirHandle, child.name);
+        count += await writeChildrenRecursive(subDir, child.children);
+      } else if (child.blob) {
+        await writeFileToDir(dirHandle, child.name, child.blob);
+        count++;
+      }
+    }
+    return count;
+  };
 
   // 执行导出
   const handleExport = async () => {
@@ -205,17 +264,18 @@ export default function ExportPage() {
 
         for (const item of group.items) {
           if (item.type === 'folder' && item.children) {
-            // 创建子文件夹
-            const subDir = await createDirectory(groupDir, item.name);
-            // 写入文件
-            for (const file of item.children) {
-              await writeFileToDir(subDir, file.name, file.blob);
-              completed++;
-              updateProgress(completed, `正在导出: ${file.name}`);
-              setProgress(Math.round((completed / totalExportFiles) * 100));
+            // 如果需要替换已有文件夹，先删除
+            if ((item as any).replaceIfExists) {
+              try {
+                await removeEntry(groupDir, item.name, true);
+              } catch { /* 文件夹不存在，正常 */ }
             }
+            const subDir = await createDirectory(groupDir, item.name);
+            const written = await writeChildrenRecursive(subDir, item.children);
+            completed += written;
+            updateProgress(completed, `正在导出: ${item.name}`);
+            setProgress(Math.round((completed / totalExportFiles) * 100));
           } else if (item.type === 'file' && item.blob) {
-            // 写入文件
             await writeFileToDir(groupDir, item.name, item.blob);
             completed++;
             updateProgress(completed, `正在导出: ${item.name}`);
@@ -224,9 +284,8 @@ export default function ExportPage() {
         }
       }
 
-      // 保存历史记录
       addHistory({
-        productInfo,
+        productInfo: baseInfo,
         fileCount: {
           folder1200: scanResult.folder1200.length,
           folder1688: scanResult.folder1688.length,
@@ -384,38 +443,65 @@ interface TreeNodeData {
   fileCount?: number;
 }
 
+// 递归构建ExportChild的树形数据
+function buildChildTreeData(children: ExportChild[]): TreeNodeData[] {
+  return children.map((child) => {
+    if (child.children) {
+      return {
+        name: child.name,
+        type: 'folder' as const,
+        fileCount: countChildrenFilesRecursive(child.children),
+        children: buildChildTreeData(child.children),
+      };
+    }
+    return {
+      name: child.name,
+      type: 'file' as const,
+      fileType: getFileType(child.name),
+    };
+  });
+}
+
+function countChildrenFilesRecursive(children: ExportChild[]): number {
+  return children.reduce((sum, child) => {
+    if (child.children) return sum + countChildrenFilesRecursive(child.children);
+    return sum + 1;
+  }, 0);
+}
+
 // ===================== 构建树形数据 =====================
 function buildTreeData(groups: ExportGroup[]): TreeNodeData[] {
-  return groups.map((group) => ({
-    name: group.folderName,
-    type: 'folder',
-    fileCount: group.items.reduce(
-      (s, item) =>
-        item.type === 'folder' && item.children ? s + item.children.length : s + 1,
-      0
-    ),
-    children: group.items.map((item) => {
+  return groups.map((group) => {
+    const fileCount = group.items.reduce((s, item) => {
       if (item.type === 'folder' && item.children) {
+        return s + countChildrenFilesRecursive(item.children);
+      }
+      return s + 1;
+    }, 0);
+
+    return {
+      name: group.folderName,
+      type: 'folder' as const,
+      fileCount,
+      children: group.items.map((item) => {
+        if (item.type === 'folder' && item.children) {
+          return {
+            name: item.name,
+            type: 'folder' as const,
+            source: item.source,
+            fileCount: countChildrenFilesRecursive(item.children),
+            children: buildChildTreeData(item.children),
+          };
+        }
         return {
           name: item.name,
-          type: 'folder' as const,
+          type: 'file' as const,
+          fileType: getFileType(item.name),
           source: item.source,
-          fileCount: item.children.length,
-          children: item.children.map((file) => ({
-            name: file.name,
-            type: 'file' as const,
-            fileType: getFileType(file.name),
-          })),
         };
-      }
-      return {
-        name: item.name,
-        type: 'file' as const,
-        fileType: getFileType(item.name),
-        source: item.source,
-      };
-    }),
-  }));
+      }),
+    };
+  });
 }
 
 // ===================== 递归树节点组件 =====================
@@ -534,7 +620,6 @@ function TreeNode({ node, depth, nodeKey, collapsed, toggleNode }: TreeNodeProps
 
 // ===================== 树形预览组件 =====================
 function TreePreview({ groups }: { groups: ExportGroup[] }) {
-  // 折叠状态：默认全部展开（空集合表示无折叠）
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
   const toggleNode = (key: string) => {
@@ -551,18 +636,15 @@ function TreePreview({ groups }: { groups: ExportGroup[] }) {
 
   const treeData = buildTreeData(groups);
 
-  // 统计总数
   const totalFolders = groups.length;
-  const totalFiles = groups.reduce(
-    (sum, g) =>
-      sum +
-      g.items.reduce(
-        (s, item) =>
-          item.type === 'folder' && item.children ? s + item.children.length : s + 1,
-        0
-      ),
-    0
-  );
+  const totalFiles = groups.reduce((sum, g) => {
+    return sum + g.items.reduce((s, item) => {
+      if (item.type === 'folder' && item.children) {
+        return s + countChildrenFilesRecursive(item.children);
+      }
+      return s + 1;
+    }, 0);
+  }, 0);
 
   return (
     <section className="card-industrial p-5">
