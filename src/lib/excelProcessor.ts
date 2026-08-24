@@ -266,45 +266,60 @@ export async function fillSPSheet(
       copyRow(4, targetStart + 2);
     }
 
-    // 多SKU: 为参考标题/关键词/参考链接插入额外行（每个SKU一行）
+    // 多SKU: 为参考标题/关键词/参考链接插入额外行（仅内容不同的SKU才插入）
     if (numSkus > 1) {
-      const extraTitleRows = numSkus - 1;
-      const titleInsertPos = 8 + offset; // 在第一个参考标题行(7+offset)之后插入
-
-      // 收集插入点及以下的合并范围，取消后重新应用
-      const titleMerges: string[] = [];
-      if (ws.model.merges) {
-        ws.model.merges.forEach((merge: any) => {
-          if (typeof merge === 'string') {
-            const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
-            if (m) {
-              const r1 = parseInt(m[2]);
-              if (r1 >= titleInsertPos) {
-                titleMerges.push(merge);
-              }
-            }
-          }
-        });
-      }
-      for (const merge of titleMerges) {
-        try { (ws as any).unMergeCells(merge); } catch { /* 忽略 */ }
-      }
-
-      ws.spliceRows(titleInsertPos, 0, ...Array(extraTitleRows).fill(undefined));
-
-      for (const merge of titleMerges) {
-        const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
-        if (m) {
-          const [, col1, row1, col2, row2] = m;
-          const r1 = parseInt(row1) + extraTitleRows;
-          const r2 = parseInt(row2) + extraTitleRows;
-          ws.mergeCells(`${col1}${r1}:${col2}${r2}`);
+      // 计算哪些SKU的参考标题行与第一行不同，需要单独一行
+      const uniqueTitleSkus: number[] = [0]; // 第一个SKU总有一行
+      for (let i = 1; i < numSkus; i++) {
+        const sameAsFirst =
+          (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
+          (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
+          (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
+        if (!sameAsFirst) {
+          uniqueTitleSkus.push(i);
         }
       }
 
-      // 复制参考标题行的格式到新插入的行
-      for (let i = 0; i < extraTitleRows; i++) {
-        copyRow(7 + offset, titleInsertPos + i);
+      const extraTitleRows = uniqueTitleSkus.length - 1; // 第一行已有，额外行数=不同的数量-1
+
+      if (extraTitleRows > 0) {
+        const titleInsertPos = 8 + offset; // 在第一个参考标题行(7+offset)之后插入
+
+        // 收集插入点及以下的合并范围，取消后重新应用
+        const titleMerges: string[] = [];
+        if (ws.model.merges) {
+          ws.model.merges.forEach((merge: any) => {
+            if (typeof merge === 'string') {
+              const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+              if (m) {
+                const r1 = parseInt(m[2]);
+                if (r1 >= titleInsertPos) {
+                  titleMerges.push(merge);
+                }
+              }
+            }
+          });
+        }
+        for (const merge of titleMerges) {
+          try { (ws as any).unMergeCells(merge); } catch { /* 忽略 */ }
+        }
+
+        ws.spliceRows(titleInsertPos, 0, ...Array(extraTitleRows).fill(undefined));
+
+        for (const merge of titleMerges) {
+          const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+          if (m) {
+            const [, col1, row1, col2, row2] = m;
+            const r1 = parseInt(row1) + extraTitleRows;
+            const r2 = parseInt(row2) + extraTitleRows;
+            ws.mergeCells(`${col1}${r1}:${col2}${r2}`);
+          }
+        }
+
+        // 复制参考标题行的格式到新插入的行
+        for (let i = 0; i < extraTitleRows; i++) {
+          copyRow(7 + offset, titleInsertPos + i);
+        }
       }
     }
   }
@@ -374,24 +389,32 @@ export async function fillSPSheet(
   const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
   const firstInfo = allInfos[0];
 
-  // 参考标题/关键词/参考链接：整行相同则只写第一行（与上一行完全一致就留空）
-  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
-    const skuInfo = allInfos[skuIdx];
-    const titleRow = 7 + offset + skuIdx;
-    const sameAsPrev = skuIdx > 0 &&
-      (skuInfo.competitorTitle || '') === (allInfos[skuIdx - 1].competitorTitle || '') &&
-      (skuInfo.keywords || '') === (allInfos[skuIdx - 1].keywords || '') &&
-      (skuInfo.relatedLink || '') === (allInfos[skuIdx - 1].relatedLink || '');
-    if (!sameAsPrev) {
-      ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
-      ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
-      ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
-      ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
+  // 参考标题/关键词/参考链接：仅为内容不同的SKU填写一行
+  // 先计算uniqueTitleSkus（内容不同的SKU索引列表）
+  const uniqueTitleSkus: number[] = isMulti ? (() => {
+    const indices: number[] = [0];
+    for (let i = 1; i < numSkus; i++) {
+      const sameAsFirst =
+        (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
+        (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
+        (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
+      if (!sameAsFirst) indices.push(i);
     }
+    return indices;
+  })() : [0];
+
+  for (let i = 0; i < uniqueTitleSkus.length; i++) {
+    const skuIdx = uniqueTitleSkus[i];
+    const skuInfo = allInfos[skuIdx];
+    const titleRow = 7 + offset + i;
+    ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
+    ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
+    ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
+    ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
   }
 
   // 调整后的偏移量（参考标题额外行导致后续行下移）
-  const titleExtraOffset = isMulti ? (numSkus - 1) : 0;
+  const titleExtraOffset = isMulti ? (uniqueTitleSkus.length - 1) : 0;
   const adjustedOffset = offset + titleExtraOffset;
 
   ws.getCell(`A${9 + adjustedOffset}`).value = `1、${useCode}-1`;
@@ -399,9 +422,14 @@ export async function fillSPSheet(
   ws.getCell(`B${15 + adjustedOffset}`).value = firstInfo.category || '';
   ws.getCell(`B${16 + adjustedOffset}`).value = firstInfo.theme || '';
   ws.getCell(`B${17 + adjustedOffset}`).value = firstInfo.keywords || '';
-  // 主卖颜色：各SKU颜色用逗号拼接
-  const allColors = allInfos.map(info => info.mainColor).filter(c => c && c.trim());
-  ws.getCell(`B${18 + adjustedOffset}`).value = allColors.join('，') || '';
+  // 主卖颜色：各SKU颜色去重后用逗号拼接
+  const colorSet = new Set<string>();
+  for (const info of allInfos) {
+    if (info.mainColor && info.mainColor.trim()) {
+      info.mainColor.split(/[,，]/).map(c => c.trim()).filter(c => c).forEach(c => colorSet.add(c));
+    }
+  }
+  ws.getCell(`B${18 + adjustedOffset}`).value = [...colorSet].join('，') || '';
 
   // 所有行操作和合并完成后，统一插入属性图
   for (const img of pendingImages) {
@@ -442,7 +470,8 @@ export async function fillTable3(
   const isMulti = options?.multiInfos && options.multiInfos.length > 1;
   const allInfos = isMulti ? options.multiInfos! : [info];
   const numSkus = allInfos.length;
-  const offset = numSkus - 1; // 表三每组占1行，偏移量 = numSkus - 1
+  const skuRowOffset = numSkus - 1; // sku信息表每组占1行，偏移量 = numSkus - 1
+  let titleRowOffset = 0; // 产品信息表参考标题行的偏移量
 
   // === sku信息 工作表 ===
   const wsSku = workbook.getWorksheet('sku信息');
@@ -501,43 +530,64 @@ export async function fillTable3(
   const wsProduct = workbook.getWorksheet('产品信息');
   if (!wsProduct) throw new Error('产品信息 工作表不存在');
 
-  // 多SKU: 为每个额外SKU插入1行
+  // 多SKU: 为参考标题/关键词/参考链接插入额外行（仅内容不同的SKU才插入）
   if (isMulti) {
-    const rowsToAdd = numSkus - 1;
-    wsProduct.spliceRows(3, 0, ...Array(rowsToAdd).fill(undefined));
+    const uniqueTitleSkus: number[] = [0];
     for (let i = 1; i < numSkus; i++) {
-      copyTableRow(wsProduct, 2, 2 + i);
+      const sameAsFirst =
+        (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
+        (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
+        (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
+      if (!sameAsFirst) uniqueTitleSkus.push(i);
     }
-  }
+    const extraTitleRows = uniqueTitleSkus.length - 1;
 
-  // 参考标题/关键词/参考链接：整行相同则只写第一行
-  for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
-    const skuInfo = allInfos[skuIdx];
-    const row = 2 + skuIdx;
-    const sameAsPrev = skuIdx > 0 &&
-      (skuInfo.competitorTitle || '') === (allInfos[skuIdx - 1].competitorTitle || '') &&
-      (skuInfo.keywords || '') === (allInfos[skuIdx - 1].keywords || '') &&
-      (skuInfo.relatedLink || '') === (allInfos[skuIdx - 1].relatedLink || '');
-    if (!sameAsPrev) {
+    if (extraTitleRows > 0) {
+      wsProduct.spliceRows(3, 0, ...Array(extraTitleRows).fill(undefined));
+      for (let i = 0; i < extraTitleRows; i++) {
+        copyTableRow(wsProduct, 2, 3 + i);
+      }
+    }
+
+    // 填写参考标题行
+    for (let i = 0; i < uniqueTitleSkus.length; i++) {
+      const skuIdx = uniqueTitleSkus[i];
+      const skuInfo = allInfos[skuIdx];
+      const row = 2 + i;
       wsProduct.getCell(`A${row}`).value = skuInfo.competitorTitle || '';
       wsProduct.getCell(`D${row}`).value = { formula: `LEN(A${row})`, result: (skuInfo.competitorTitle || '').length };
       wsProduct.getCell(`E${row}`).value = skuInfo.keywords || '';
       wsProduct.getCell(`F${row}`).value = skuInfo.relatedLink || '';
     }
+
+    // 偏移量按实际插入的行数计算
+    titleRowOffset = uniqueTitleSkus.length - 1;
+  } else {
+    // 单SKU直接填第一行
+    wsProduct.getCell(`A2`).value = allInfos[0].competitorTitle || '';
+    wsProduct.getCell(`D2`).value = { formula: `LEN(A2)`, result: (allInfos[0].competitorTitle || '').length };
+    wsProduct.getCell(`E2`).value = allInfos[0].keywords || '';
+    wsProduct.getCell(`F2`).value = allInfos[0].relatedLink || '';
+    titleRowOffset = 0;
   }
 
   // 共享内容（按偏移量填写）
   const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
   const firstInfo = allInfos[0];
 
-  wsProduct.getCell(`A${4 + offset}`).value = `1、${useCode}-1`;
-  wsProduct.getCell(`A${9 + offset}`).value = firstInfo.material || '';
-  wsProduct.getCell(`B${10 + offset}`).value = firstInfo.category || '';
-  wsProduct.getCell(`B${11 + offset}`).value = firstInfo.theme || '';
-  wsProduct.getCell(`B${12 + offset}`).value = firstInfo.keywords || '';
-  // 主卖颜色：各SKU颜色用逗号拼接
-  const allColorsT3 = allInfos.map(info => info.mainColor).filter(c => c && c.trim());
-  wsProduct.getCell(`B${13 + offset}`).value = allColorsT3.join('，') || '';
+  wsProduct.getCell(`A${4 + titleRowOffset}`).value = `1、${useCode}-1`;
+  wsProduct.getCell(`A${9 + titleRowOffset}`).value = firstInfo.material || '';
+  wsProduct.getCell(`B${10 + titleRowOffset}`).value = firstInfo.category || '';
+  wsProduct.getCell(`B${11 + titleRowOffset}`).value = firstInfo.theme || '';
+  wsProduct.getCell(`B${12 + titleRowOffset}`).value = firstInfo.keywords || '';
+  // 主卖颜色：各SKU颜色去重后用逗号拼接
+  const colorSetT3 = new Set<string>();
+  for (const info of allInfos) {
+    if (info.mainColor && info.mainColor.trim()) {
+      info.mainColor.split(/[,，]/).map(c => c.trim()).filter(c => c).forEach(c => colorSetT3.add(c));
+    }
+  }
+  wsProduct.getCell(`B${13 + titleRowOffset}`).value = [...colorSetT3].join('，') || '';
 
   const buffer = await workbook.xlsx.writeBuffer();
   return {
