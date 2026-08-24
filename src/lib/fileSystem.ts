@@ -134,7 +134,7 @@ export async function scanDirectory(
         for await (const subEntry of folder.handle.values()) {
           if (subEntry.kind === 'directory') {
             const lowerName = subEntry.name.toLowerCase().replace(/\s/g, '');
-            if (lowerName === '1200' || lowerName === '1688' || lowerName === 'ozon' || lowerName === '视频' || lowerName === 'video') {
+            if (lowerName === '1200' || lowerName === '1688' || lowerName === 'ozon' || lowerName === '视频' || lowerName === 'video' || lowerName === 'videos' || lowerName === '视频文件') {
               const subFiles: ScannedFile[] = [];
               for await (const fileEntry of subEntry.values()) {
                 if (fileEntry.kind === 'file') {
@@ -177,7 +177,7 @@ export async function scanDirectory(
                     existingPaths.add(f.path);
                   }
                 }
-              } else if (lowerName === '视频' || lowerName === 'video') {
+              } else if (lowerName === '视频' || lowerName === 'video' || lowerName === 'videos' || lowerName === '视频文件') {
                 const existingPaths = new Set(result.videos.map(f => f.path));
                 for (const f of subFiles) {
                   if (isVideoFile(f.name) && !existingPaths.has(f.path)) {
@@ -186,6 +186,28 @@ export async function scanDirectory(
                   }
                 }
               }
+            } else if (subEntry.kind === 'directory') {
+              // 未匹配已知文件夹名的子文件夹：检查是否含视频文件
+              try {
+                for await (const fileEntry of subEntry.values()) {
+                  if (fileEntry.kind === 'file') {
+                    const file = await fileEntry.getFile();
+                    if (isVideoFile(fileEntry.name)) {
+                      const scanned: ScannedFile = {
+                        name: fileEntry.name,
+                        file,
+                        path: `${folder.name}/${subEntry.name}/${fileEntry.name}`,
+                        size: file.size,
+                        type: file.type,
+                      };
+                      const existingPaths = new Set(result.videos.map(f => f.path));
+                      if (!existingPaths.has(scanned.path)) {
+                        result.videos.push(scanned);
+                      }
+                    }
+                  }
+                }
+              } catch { /* 忽略 */ }
             }
           }
         }

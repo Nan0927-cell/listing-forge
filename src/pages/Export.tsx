@@ -61,10 +61,11 @@ export default function ExportPage() {
       .map(img => ({ name: img.newName, blob: img.file.file }));
   };
 
-  // 获取1688配对图片文件 — 嵌套结构：按SKU分组，每组一个子文件夹，包含该SKU所有图片
+  // 获取1688配对图片文件
+  // multiA(同款不同数): 直接返回所有图片，不分SKU子文件夹
+  // multiB(普通多SKU): 按SKU分组，每组一个子文件夹
   const get1688Files = (): ExportChild[] => {
     if (!scanResult) return [];
-    const children: ExportChild[] = [];
     const pairedFiles = new Set<string>();
 
     // 按文件路径分组1688图片（和Pair.tsx相同的逻辑）
@@ -93,11 +94,36 @@ export default function ExportPage() {
       pairGroupMap.get(gi)!.push(pair);
     }
 
-    // 为每个图片组创建SKU子文件夹，包含所有图片
+    // multiA: 直接返回所有图片，不分SKU子文件夹
+    if (listingMode === 'multiA') {
+      const flatChildren: ExportChild[] = [];
+      for (const imgGroup of imgGroups) {
+        const groupPairs = pairGroupMap.get(imgGroup.index) || [];
+        for (const pair of groupPairs) {
+          if (pair.squareImage) {
+            const ext = pair.squareImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+            flatChildren.push({ name: `${pair.groupName}方图.${ext}`, blob: pair.squareImage.file });
+            pairedFiles.add(pair.squareImage.name);
+          }
+          if (pair.mainImage) {
+            const ext = pair.mainImage.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+            flatChildren.push({ name: `${pair.groupName}首图.${ext}`, blob: pair.mainImage.file });
+            pairedFiles.add(pair.mainImage.name);
+          }
+        }
+        for (const img of imgGroup.files) {
+          if (!pairedFiles.has(img.name)) {
+            flatChildren.push({ name: img.name, blob: img.file });
+          }
+        }
+      }
+      return flatChildren;
+    }
+
+    // multiB / single: 按SKU子文件夹组织
+    const children: ExportChild[] = [];
     for (const imgGroup of imgGroups) {
       const skuChildren: ExportChild[] = [];
-
-      // 添加配对图片（重命名：陈悦组方图.jpg / 杜青组首图.jpg ...）
       const groupPairs = pairGroupMap.get(imgGroup.index) || [];
       for (const pair of groupPairs) {
         if (pair.squareImage) {
@@ -111,14 +137,11 @@ export default function ExportPage() {
           pairedFiles.add(pair.mainImage.name);
         }
       }
-
-      // 添加未配对的其他图片（保留原始名称）
       for (const img of imgGroup.files) {
         if (!pairedFiles.has(img.name)) {
           skuChildren.push({ name: img.name, blob: img.file });
         }
       }
-
       children.push({ name: imgGroup.skuCode, children: skuChildren });
     }
 

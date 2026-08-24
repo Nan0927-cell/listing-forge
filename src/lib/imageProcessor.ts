@@ -180,7 +180,7 @@ function classifySingleGroup(
         }
       }
       if (!matchedCode) {
-        matchedCode = groupFolderName || productCode;
+        matchedCode = allCodes[groupIndex] || productCode;
       }
     }
     // 5. 宽松前缀匹配：文件名以SKU编码开头，后缀不是纯数字序列

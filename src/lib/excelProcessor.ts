@@ -375,13 +375,17 @@ export async function fillSPSheet(
   const firstInfo = allInfos[0];
 
   // 参考标题/关键词/参考链接：每个SKU一行
+  // 参考链接：如果所有SKU一致，只写第一行
+  const allLinksSame = allInfos.every(info => (info.relatedLink || '') === (allInfos[0].relatedLink || ''));
   for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
     const skuInfo = allInfos[skuIdx];
     const titleRow = 7 + offset + skuIdx;
     ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
     ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
     ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
-    ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
+    if (!allLinksSame || skuIdx === 0) {
+      ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
+    }
   }
 
   // 调整后的偏移量（参考标题额外行导致后续行下移）
@@ -504,6 +508,8 @@ export async function fillTable3(
     }
   }
 
+  // 参考链接：如果所有SKU一致，只写第一行
+  const allLinksSameT3 = allInfos.every(info => (info.relatedLink || '') === (allInfos[0].relatedLink || ''));
   for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
     const skuInfo = allInfos[skuIdx];
     const row = 2 + skuIdx;
@@ -511,7 +517,9 @@ export async function fillTable3(
     wsProduct.getCell(`A${row}`).value = skuInfo.competitorTitle || '';
     wsProduct.getCell(`D${row}`).value = { formula: `LEN(A${row})`, result: (skuInfo.competitorTitle || '').length };
     wsProduct.getCell(`E${row}`).value = skuInfo.keywords || '';
-    wsProduct.getCell(`F${row}`).value = skuInfo.relatedLink || '';
+    if (!allLinksSameT3 || skuIdx === 0) {
+      wsProduct.getCell(`F${row}`).value = skuInfo.relatedLink || '';
+    }
   }
 
   // 共享内容（按偏移量填写）
