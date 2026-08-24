@@ -101,8 +101,13 @@ export async function scanDirectory(
     }
   }
 
-  // 检查根目录下是否有"视频"文件夹
-  const videoFolder = allFolders.find(f => f.name === '视频' || f.name.toLowerCase().replace(/\s/g, '') === 'video');
+  // 检查根目录下是否有视频文件夹
+  const videoFolder = allFolders.find(f => {
+    const lower = f.name.toLowerCase().replace(/\s/g, '');
+    return lower === '视频' || lower === 'video' || lower === 'videos' ||
+           lower === '视频文件' || lower === 'video文件夹' || lower === '视频文件夹' ||
+           lower === 'shipin' || lower.includes('video') || lower.includes('视频');
+  });
   if (videoFolder) {
     try {
       for await (const entry of videoFolder.handle.values()) {
@@ -121,6 +126,28 @@ export async function scanDirectory(
       }
     } catch (e) {
       console.warn('无法扫描视频文件夹', e);
+    }
+  }
+
+  // 如果还没找到视频，扫描所有other文件夹中是否含视频文件
+  if (result.videos.length === 0) {
+    for (const folder of result.otherFolders) {
+      try {
+        for await (const entry of folder.handle.values()) {
+          if (entry.kind === 'file') {
+            const file = await entry.getFile();
+            if (isVideoFile(entry.name)) {
+              result.videos.push({
+                name: entry.name,
+                file,
+                path: `${folder.name}/${entry.name}`,
+                size: file.size,
+                type: file.type,
+              });
+            }
+          }
+        }
+      } catch { /* 忽略 */ }
     }
   }
 

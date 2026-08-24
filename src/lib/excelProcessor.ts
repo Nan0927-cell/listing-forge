@@ -374,16 +374,18 @@ export async function fillSPSheet(
   const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
   const firstInfo = allInfos[0];
 
-  // 参考标题/关键词/参考链接：每个SKU一行
-  // 参考链接：如果所有SKU一致，只写第一行
-  const allLinksSame = allInfos.every(info => (info.relatedLink || '') === (allInfos[0].relatedLink || ''));
+  // 参考标题/关键词/参考链接：整行相同则只写第一行（与上一行完全一致就留空）
   for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
     const skuInfo = allInfos[skuIdx];
     const titleRow = 7 + offset + skuIdx;
-    ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
-    ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
-    ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
-    if (!allLinksSame || skuIdx === 0) {
+    const sameAsPrev = skuIdx > 0 &&
+      (skuInfo.competitorTitle || '') === (allInfos[skuIdx - 1].competitorTitle || '') &&
+      (skuInfo.keywords || '') === (allInfos[skuIdx - 1].keywords || '') &&
+      (skuInfo.relatedLink || '') === (allInfos[skuIdx - 1].relatedLink || '');
+    if (!sameAsPrev) {
+      ws.getCell(`A${titleRow}`).value = skuInfo.competitorTitle || '';
+      ws.getCell(`D${titleRow}`).value = { formula: `LEN(A${titleRow})`, result: (skuInfo.competitorTitle || '').length };
+      ws.getCell(`E${titleRow}`).value = skuInfo.keywords || '';
       ws.getCell(`F${titleRow}`).value = skuInfo.relatedLink || '';
     }
   }
@@ -508,16 +510,18 @@ export async function fillTable3(
     }
   }
 
-  // 参考链接：如果所有SKU一致，只写第一行
-  const allLinksSameT3 = allInfos.every(info => (info.relatedLink || '') === (allInfos[0].relatedLink || ''));
+  // 参考标题/关键词/参考链接：整行相同则只写第一行
   for (let skuIdx = 0; skuIdx < numSkus; skuIdx++) {
     const skuInfo = allInfos[skuIdx];
     const row = 2 + skuIdx;
-
-    wsProduct.getCell(`A${row}`).value = skuInfo.competitorTitle || '';
-    wsProduct.getCell(`D${row}`).value = { formula: `LEN(A${row})`, result: (skuInfo.competitorTitle || '').length };
-    wsProduct.getCell(`E${row}`).value = skuInfo.keywords || '';
-    if (!allLinksSameT3 || skuIdx === 0) {
+    const sameAsPrev = skuIdx > 0 &&
+      (skuInfo.competitorTitle || '') === (allInfos[skuIdx - 1].competitorTitle || '') &&
+      (skuInfo.keywords || '') === (allInfos[skuIdx - 1].keywords || '') &&
+      (skuInfo.relatedLink || '') === (allInfos[skuIdx - 1].relatedLink || '');
+    if (!sameAsPrev) {
+      wsProduct.getCell(`A${row}`).value = skuInfo.competitorTitle || '';
+      wsProduct.getCell(`D${row}`).value = { formula: `LEN(A${row})`, result: (skuInfo.competitorTitle || '').length };
+      wsProduct.getCell(`E${row}`).value = skuInfo.keywords || '';
       wsProduct.getCell(`F${row}`).value = skuInfo.relatedLink || '';
     }
   }
