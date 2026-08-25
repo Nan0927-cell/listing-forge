@@ -153,12 +153,9 @@ export default function ExportPage() {
     return scanResult.videos.map(v => ({ name: v.name, blob: v.file }));
   };
 
-  // 获取OZON文件 — 按顺序重命名避免不同SKU同名文件覆盖
+  // 获取OZON文件
   const getOzonFiles = (): ExportChild[] => {
-    return scanResult.ozonFiles.map((f, i) => {
-      const ext = f.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-      return { name: `${i + 1}.${ext}`, blob: f.file };
-    });
+    return scanResult.ozonFiles.map(f => ({ name: f.name, blob: f.file }));
   };
 
   // 构建导出结构
