@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useStore } from '@/store/useStore';
 import { autoClassifyImages, createThumbnailUrl } from '@/lib/imageProcessor';
@@ -51,6 +51,13 @@ export default function Classify() {
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
   const [activeGroupIndex, setActiveGroupIndex] = useState(0);
 
+  // 属性图配对拖拽状态（仅multiA）
+  const [draggedAttrIdx, setDraggedAttrIdx] = useState<number | null>(null);
+  const [dragOverSkuIdx, setDragOverSkuIdx] = useState<number | null>(null);
+  const draggedAttrRef = useRef<number | null>(null);
+  const attrMouseYRef = useRef(0);
+  const attrScrollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // 多SKU分组：计算组数和当前组图片
   const groupCount = useMemo(() => {
     if (!isMulti) return 1;
@@ -77,6 +84,100 @@ export default function Classify() {
     if (!isMulti) return activeInfo.productCode;
     return multiProductInfos[activeGroupIndex]?.productCode || '';
   }, [isMulti, multiProductInfos, activeGroupIndex, activeInfo.productCode]);
+
+  // multiA属性图配对：所有属性图及其全局索引
+  const attrImagesWithIdx = useMemo(() => {
+    if (listingMode !== 'multiA') return [];
+    return classifiedImages
+      .map((img, i) => ({ img, i }))
+      .filter(({ img }) => img.category === 'attribute');
+  }, [classifiedImages, listingMode]);
+
+  // 未配对的属性图（newName === 原文件名）
+  const unpairedAttrImages = attrImagesWithIdx.filter(({ img }) => img.newName === img.file.name);
+
+  // 所有SKU编码（来自首页填写）
+  const attrSkuCodes = useMemo(() => {
+    return multiProductInfos.map(p => p.productCode).filter(c => c.trim());
+  }, [multiProductInfos]);
+
+  // 获取已配对到某个SKU的属性图
+  const getAttrForSku = (skuCode: string) => {
+    return attrImagesWithIdx.filter(({ img }) => {
+      const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+      return img.newName === `${skuCode}.${ext}`;
+    });
+  };
+
+  // 属性图拖拽处理
+  const handleAttrDragStart = (globalIdx: number) => {
+    draggedAttrRef.current = globalIdx;
+    setDraggedAttrIdx(globalIdx);
+  };
+
+  const handleAttrDragEnd = () => {
+    draggedAttrRef.current = null;
+    setDraggedAttrIdx(null);
+    setDragOverSkuIdx(null);
+    if (attrScrollRef.current) {
+      clearInterval(attrScrollRef.current);
+      attrScrollRef.current = null;
+    }
+  };
+
+  const handleAttrContainerDragOver = (e: React.DragEvent) => {
+    if (draggedAttrIdx === null) return;
+    attrMouseYRef.current = e.clientY;
+    if (attrScrollRef.current === null) {
+      attrScrollRef.current = setInterval(() => {
+        const threshold = 100;
+        const speed = 15;
+        const y = attrMouseYRef.current;
+        const vh = window.innerHeight;
+        if (y < threshold) window.scrollBy(0, -speed);
+        else if (y > vh - threshold) window.scrollBy(0, speed);
+      }, 30);
+    }
+  };
+
+  const handleSkuDragOver = (e: React.DragEvent, skuIdx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverSkuIdx(skuIdx);
+  };
+
+  const handleSkuDrop = (e: React.DragEvent, skuIdx: number) => {
+    e.preventDefault();
+    setDragOverSkuIdx(null);
+    const idx = draggedAttrRef.current;
+    const skuCode = attrSkuCodes[skuIdx];
+    if (idx !== null && skuCode) {
+      const updated = [...classifiedImages];
+      const ext = updated[idx].file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+      updated[idx] = { ...updated[idx], newName: `${skuCode}.${ext}` };
+      setClassifiedImages(updated);
+    }
+    draggedAttrRef.current = null;
+    setDraggedAttrIdx(null);
+    if (attrScrollRef.current) {
+      clearInterval(attrScrollRef.current);
+      attrScrollRef.current = null;
+    }
+  };
+
+  // 取消配对（重置为原文件名）
+  const handleUnpairAttr = (globalIdx: number) => {
+    const updated = [...classifiedImages];
+    updated[globalIdx] = { ...updated[globalIdx], newName: updated[globalIdx].file.name };
+    setClassifiedImages(updated);
+  };
+
+  // 组件卸载时清理滚动定时器
+  useEffect(() => {
+    return () => {
+      if (attrScrollRef.current) clearInterval(attrScrollRef.current);
+    };
+  }, []);
 
   // 自动分类
   useEffect(() => {
@@ -257,8 +358,10 @@ export default function Classify() {
     for (const img of images) {
       if (img.category === 'attribute') {
         if (listingMode === 'multiA') {
-          // 同款不同数(multiA)：属性图保持原文件名，用户自行配对
-          img.newName = img.file.name;
+          // multiA：不覆盖已配对的名称，未配对的保持原文件名
+          if (!img.newName || img.newName === img.file.name) {
+            img.newName = img.file.name;
+          }
           img.order = 0;
         } else {
           // 其他模式：按组对应的SKU编码命名
@@ -574,6 +677,130 @@ export default function Classify() {
             </button>
           </div>
         </div>
+      )}
+
+      {/* 属性图配对 - 仅multiA模式 */}
+      {listingMode === 'multiA' && attrImagesWithIdx.length > 0 && (
+        <section className="card-industrial p-5" onDragOver={handleAttrContainerDragOver}>
+          <div className="mb-4 flex items-center gap-2">
+            <span className="section-tag">ATTR PAIR</span>
+            <h2 className="text-lg font-bold">属性图配对</h2>
+            <span className="font-mono text-sm text-ink-400">
+              (未配对 {unpairedAttrImages.length} · 共 {attrImagesWithIdx.length} 张)
+            </span>
+          </div>
+          <p className="mb-4 text-sm text-ink-500">
+            将左侧未配对的属性图拖拽到右侧对应的SKU框中，配对后图片将以该SKU编码命名。
+          </p>
+
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            {/* 左侧：未配对的属性图 */}
+            <div>
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-industrial text-ink-500">
+                未配对属性图 / UNPAIRED
+              </div>
+              {unpairedAttrImages.length === 0 ? (
+                <div className="flex items-center justify-center border-2 border-dashed border-ink-300 py-8 text-sm text-ink-400">
+                  <CheckSquare className="mr-2 h-4 w-4 text-green-600" />
+                  所有属性图已配对
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {unpairedAttrImages.map(({ img, i }) => (
+                    <div
+                      key={i}
+                      draggable
+                      onDragStart={() => handleAttrDragStart(i)}
+                      onDragEnd={handleAttrDragEnd}
+                      className={cn(
+                        'border-2 p-2 transition-colors cursor-grab active:cursor-grabbing',
+                        'border-ink-900 hover:border-flame',
+                        draggedAttrIdx === i && 'ring-2 ring-flame ring-offset-1 opacity-40'
+                      )}
+                    >
+                      <div className="relative mb-2 aspect-square overflow-hidden bg-ink-100">
+                        {thumbnails[img.file.path || img.file.name] ? (
+                          <img
+                            src={thumbnails[img.file.path || img.file.name]}
+                            alt={img.file.name}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center">
+                            <ImageIcon className="h-5 w-5 text-ink-300" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="truncate text-[11px] font-medium">{img.file.name}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* 右侧：SKU配对区 */}
+            <div>
+              <div className="mb-2 font-mono text-[10px] uppercase tracking-industrial text-ink-500">
+                SKU配对区 / DROP ZONES
+              </div>
+              <div className="space-y-3">
+                {attrSkuCodes.map((sku, skuIdx) => {
+                  const paired = getAttrForSku(sku);
+                  return (
+                    <div
+                      key={skuIdx}
+                      onDragOver={(e) => handleSkuDragOver(e, skuIdx)}
+                      onDragLeave={() => setDragOverSkuIdx(null)}
+                      onDrop={(e) => handleSkuDrop(e, skuIdx)}
+                      className={cn(
+                        'border-2 p-3 transition-colors',
+                        dragOverSkuIdx === skuIdx
+                          ? 'border-flame bg-flame/10'
+                          : 'border-ink-300'
+                      )}
+                    >
+                      <div className="mb-2 flex items-center gap-2">
+                        <span className="font-mono text-sm font-bold text-flame">{sku}</span>
+                        <span className="text-xs text-ink-500">({paired.length} 张)</span>
+                      </div>
+                      {paired.length === 0 ? (
+                        <div className="py-4 text-center text-xs text-ink-400">
+                          {dragOverSkuIdx === skuIdx ? '松开以配对' : '拖拽属性图到此处'}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-3 gap-2">
+                          {paired.map(({ img, i }) => (
+                            <div key={i} className="relative border border-ink-300 p-1">
+                              <div className="aspect-square overflow-hidden bg-ink-100">
+                                {thumbnails[img.file.path || img.file.name] && (
+                                  <img
+                                    src={thumbnails[img.file.path || img.file.name]}
+                                    alt={img.file.name}
+                                    className="h-full w-full object-cover"
+                                  />
+                                )}
+                              </div>
+                              <div className="truncate text-[10px] font-mono font-bold text-green-700">
+                                {img.newName}
+                              </div>
+                              <button
+                                onClick={() => handleUnpairAttr(i)}
+                                className="absolute right-0.5 top-0.5 bg-rust p-0.5 text-white hover:bg-rust/80"
+                                title="取消配对"
+                              >
+                                <X className="h-2.5 w-2.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </section>
       )}
 
       {/* 导航 */}
