@@ -249,12 +249,14 @@ export async function scanDirectory(
   }
 
   // 独立OZON/视频扫描：无论1200/1688条件如何，都扫描所有子文件夹中的ozon/视频子目录
+  console.log(`[OZON扫描] 开始独立扫描, otherFolders数量: ${result.otherFolders.length}, 当前ozonFiles数量: ${result.ozonFiles.length}`);
   for (const folder of result.otherFolders) {
     try {
       for await (const subEntry of folder.handle.values()) {
         if (subEntry.kind === 'directory') {
           const lowerName = subEntry.name.toLowerCase().replace(/\s/g, '');
           if (lowerName === 'ozon') {
+            console.log(`[OZON扫描] 在 ${folder.name} 中找到 ozon 子文件夹`);
             for await (const fileEntry of subEntry.values()) {
               if (fileEntry.kind === 'file') {
                 const file = await fileEntry.getFile();
@@ -301,6 +303,8 @@ export async function scanDirectory(
     result.folder1688.length +
     result.videos.length +
     result.ozonFiles.length;
+
+  console.log(`[OZON扫描] 扫描完成, 最终ozonFiles数量: ${result.ozonFiles.length}`, result.ozonFiles.map(f => f.path));
 
   return result;
 }

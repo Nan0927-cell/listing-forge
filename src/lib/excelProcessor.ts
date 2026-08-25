@@ -399,10 +399,10 @@ export async function fillSPSheet(
       ws.getCell(`G${startRow + 2}`).value = parseFloat(skuInfo.packageHeight) || '';
     }
 
-    // 材质：始终写入（清空模板默认值如"涤纶"）
-    ws.getCell(`H${startRow}`).value = skuInfo.material || '';
-    ws.getCell(`H${startRow + 1}`).value = '';
-    ws.getCell(`H${startRow + 2}`).value = '';
+    // 材质：使用表单填写的值，不清空其他行（合并单元格后清空会导致值丢失）
+    if (skuInfo.material) {
+      ws.getCell(`H${startRow}`).value = skuInfo.material;
+    }
 
     ws.getCell(`M${startRow}`).value = prices.tier3;
     ws.getCell(`M${startRow + 1}`).value = prices.tier2;

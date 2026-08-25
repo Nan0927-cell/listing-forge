@@ -154,7 +154,32 @@ export default function ExportPage() {
   };
 
   // 获取OZON文件
+  // 多SKU模式：按SKU子文件夹组织，避免同名文件互相覆盖
   const getOzonFiles = (): ExportChild[] => {
+    if (!scanResult) return [];
+
+    // 多SKU模式：按路径第一段(SKU子文件夹名)分组
+    if (isMulti) {
+      const ozonGroupMap = new Map<string, ScannedFile[]>();
+      for (const f of scanResult.ozonFiles) {
+        const pathParts = f.path.split('/');
+        const groupKey = pathParts.length > 2 ? pathParts[0] : 'default';
+        if (!ozonGroupMap.has(groupKey)) ozonGroupMap.set(groupKey, []);
+        ozonGroupMap.get(groupKey)!.push(f);
+      }
+
+      const children: ExportChild[] = [];
+      let index = 0;
+      for (const [key, files] of ozonGroupMap) {
+        const skuCode = multiProductInfos[index]?.productCode || key;
+        const skuChildren: ExportChild[] = files.map(f => ({ name: f.name, blob: f.file }));
+        children.push({ name: skuCode, children: skuChildren });
+        index++;
+      }
+      return children;
+    }
+
+    // 单SKU模式：直接返回扁平列表
     return scanResult.ozonFiles.map(f => ({ name: f.name, blob: f.file }));
   };
 
