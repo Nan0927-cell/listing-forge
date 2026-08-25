@@ -154,11 +154,11 @@ export default function ExportPage() {
   };
 
   // 获取OZON文件
-  // 多SKU模式：按SKU子文件夹组织，避免同名文件互相覆盖
+  // 多SKU模式：每个SKU文件夹内含"900 1200"子文件夹
   const getOzonFiles = (): ExportChild[] => {
     if (!scanResult) return [];
 
-    // 多SKU模式：按路径第一段(SKU子文件夹名)分组
+    // 多SKU模式：按路径第一段(SKU子文件夹名)分组，每个SKU内含"900 1200"子文件夹
     if (isMulti) {
       const ozonGroupMap = new Map<string, ScannedFile[]>();
       for (const f of scanResult.ozonFiles) {
@@ -172,8 +172,9 @@ export default function ExportPage() {
       let index = 0;
       for (const [key, files] of ozonGroupMap) {
         const skuCode = multiProductInfos[index]?.productCode || key;
-        const skuChildren: ExportChild[] = files.map(f => ({ name: f.name, blob: f.file }));
-        children.push({ name: skuCode, children: skuChildren });
+        const fileChildren: ExportChild[] = files.map(f => ({ name: f.name, blob: f.file }));
+        // SKU文件夹内含"900 1200"子文件夹
+        children.push({ name: skuCode, children: [{ name: '900 1200', children: fileChildren }] });
         index++;
       }
       return children;
@@ -213,13 +214,30 @@ export default function ExportPage() {
     // 组2: 商品编码-品类-ozon-产品线N (仅当有ozon时)
     if (processResult.ozonRenamed && scanResult.ozonFiles.length > 0) {
       const group2Name = `${mergedCode}-${category || '未分类'}-ozon-${lineLabel}`;
-      groups.push({
-        folderName: group2Name,
-        items: [
-          { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
-          { type: 'folder', name: '900 1200', source: 'OZON文件夹', children: getOzonFiles() },
-        ],
-      });
+      const group2Items: ExportItem[] = [
+        { type: 'folder', name: processResult.videoFolderName, source: '视频文件夹', children: getVideoFiles() },
+      ];
+      if (isMulti) {
+        // 多SKU: 每个SKU文件夹内含"900 1200"子文件夹，直接展开
+        for (const child of getOzonFiles()) {
+          if (child.children) {
+            group2Items.push({
+              type: 'folder',
+              name: child.name,
+              source: 'OZON文件夹',
+              children: child.children,
+            });
+          }
+        }
+      } else {
+        group2Items.push({
+          type: 'folder',
+          name: '900 1200',
+          source: 'OZON文件夹',
+          children: getOzonFiles(),
+        });
+      }
+      groups.push({ folderName: group2Name, items: group2Items });
     }
 
     // 组3: 商品编码-品类-刊登资料
