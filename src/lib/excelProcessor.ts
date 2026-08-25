@@ -373,12 +373,16 @@ export async function fillSPSheet(
     }
 
     // 多SKU: 合并新增行的单元格
-    if (isMulti && skuIdx > 0) {
-      ws.mergeCells(`A${startRow}:A${endRow}`);
-      ws.mergeCells(`B${startRow}:B${endRow}`);
-      ws.mergeCells(`C${startRow}:C${endRow}`);
-      ws.mergeCells(`E${startRow}:E${endRow}`);
-    }
+  if (isMulti && skuIdx > 0) {
+    ws.mergeCells(`A${startRow}:A${endRow}`);
+    ws.mergeCells(`B${startRow}:B${endRow}`);
+    ws.mergeCells(`C${startRow}:C${endRow}`);
+    ws.mergeCells(`E${startRow}:E${endRow}`);
+    ws.mergeCells(`H${startRow}:H${endRow}`);
+    ws.mergeCells(`I${startRow}:I${endRow}`);
+    ws.mergeCells(`J${startRow}:J${endRow}`);
+    ws.mergeCells(`K${startRow}:K${endRow}`);
+  }
 
     ws.getCell(`B${startRow}`).value = skuInfo.productCode;
     ws.getCell(`C${startRow}`).value = skuInfo.productName || '';
@@ -395,9 +399,10 @@ export async function fillSPSheet(
       ws.getCell(`G${startRow + 2}`).value = parseFloat(skuInfo.packageHeight) || '';
     }
 
-    if (skuInfo.material) {
-      ws.getCell(`H${startRow}`).value = skuInfo.material;
-    }
+    // 材质：始终写入（清空模板默认值如"涤纶"）
+    ws.getCell(`H${startRow}`).value = skuInfo.material || '';
+    ws.getCell(`H${startRow + 1}`).value = '';
+    ws.getCell(`H${startRow + 2}`).value = '';
 
     ws.getCell(`M${startRow}`).value = prices.tier3;
     ws.getCell(`M${startRow + 1}`).value = prices.tier2;

@@ -94,15 +94,16 @@ export default function Classify() {
     }
   }, [scanResult, activeInfo.productCode, activeInfo.styleCode, classifiedImages.length, setClassifiedImages, isMulti, multiProductInfos]);
 
-  // 生成缩略图
+  // 生成缩略图 — 用path作key避免不同组同名文件冲突
   useEffect(() => {
     if (classifiedImages.length === 0) return;
     setLoading(true);
     const promises = classifiedImages.map(async (img) => {
-      if (!thumbnails[img.file.name]) {
+      const key = img.file.path || img.file.name;
+      if (!thumbnails[key]) {
         try {
           const url = await createThumbnailUrl(img.file.file, 200);
-          return { name: img.file.name, url };
+          return { key, url };
         } catch {
           return null;
         }
@@ -112,7 +113,7 @@ export default function Classify() {
     Promise.all(promises).then((results) => {
       const newThumbs: Record<string, string> = {};
       results.forEach((r) => {
-        if (r) newThumbs[r.name] = r.url;
+        if (r) newThumbs[r.key] = r.url;
       });
       if (Object.keys(newThumbs).length > 0) {
         setThumbnails((prev) => ({ ...prev, ...newThumbs }));
@@ -308,7 +309,7 @@ export default function Classify() {
   // 构建预览图片数组（当前组）
   const previewImages = displayImages
     .map((img, originalIndex) => ({
-      src: thumbnails[img.file.name] || '',
+      src: thumbnails[img.file.path || img.file.name] || '',
       name: img.file.name,
       originalIndex,
     }))
@@ -483,9 +484,9 @@ export default function Classify() {
                   className="h-14 w-14 shrink-0 overflow-hidden border border-ink-300 bg-white hover:border-flame"
                   title="点击查看大图"
                 >
-                  {thumbnails[img.file.name] ? (
-                    <img
-                      src={thumbnails[img.file.name]}
+                  {thumbnails[img.file.path || img.file.name] ? (
+          <img
+            src={thumbnails[img.file.path || img.file.name]}
                       alt={img.file.name}
                       className="h-full w-full object-cover"
                     />

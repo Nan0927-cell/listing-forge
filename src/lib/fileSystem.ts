@@ -248,6 +248,54 @@ export async function scanDirectory(
     }
   }
 
+  // 独立OZON/视频扫描：无论1200/1688条件如何，都扫描所有子文件夹中的ozon/视频子目录
+  for (const folder of result.otherFolders) {
+    try {
+      for await (const subEntry of folder.handle.values()) {
+        if (subEntry.kind === 'directory') {
+          const lowerName = subEntry.name.toLowerCase().replace(/\s/g, '');
+          if (lowerName === 'ozon') {
+            for await (const fileEntry of subEntry.values()) {
+              if (fileEntry.kind === 'file') {
+                const file = await fileEntry.getFile();
+                const scanned: ScannedFile = {
+                  name: fileEntry.name,
+                  file,
+                  path: `${folder.name}/${subEntry.name}/${fileEntry.name}`,
+                  size: file.size,
+                  type: file.type,
+                };
+                const existingPaths = new Set(result.ozonFiles.map(f => f.path));
+                if (!existingPaths.has(scanned.path)) {
+                  result.ozonFiles.push(scanned);
+                }
+              }
+            }
+          } else if (lowerName === '视频' || lowerName === 'video' || lowerName === 'videos' || lowerName === '视频文件') {
+            for await (const fileEntry of subEntry.values()) {
+              if (fileEntry.kind === 'file') {
+                const file = await fileEntry.getFile();
+                if (isVideoFile(fileEntry.name)) {
+                  const scanned: ScannedFile = {
+                    name: fileEntry.name,
+                    file,
+                    path: `${folder.name}/${subEntry.name}/${fileEntry.name}`,
+                    size: file.size,
+                    type: file.type,
+                  };
+                  const existingPaths = new Set(result.videos.map(f => f.path));
+                  if (!existingPaths.has(scanned.path)) {
+                    result.videos.push(scanned);
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch { /* 忽略 */ }
+  }
+
   result.totalFiles =
     result.folder1200.length +
     result.folder1688.length +
