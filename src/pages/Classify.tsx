@@ -358,8 +358,12 @@ export default function Classify() {
     for (const img of images) {
       if (img.category === 'attribute') {
         if (listingMode === 'multiA') {
-          // multiA：不覆盖已配对的名称，未配对的保持原文件名
-          if (!img.newName || img.newName === img.file.name) {
+          // multiA：已配对(名称是某个SKU编码)的保持不变，其余重置为原文件名
+          const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+          const isPaired = multiProductInfos.some(p =>
+            p.productCode && img.newName === `${p.productCode}.${ext}`
+          );
+          if (!isPaired) {
             img.newName = img.file.name;
           }
           img.order = 0;
