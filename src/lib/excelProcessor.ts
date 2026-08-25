@@ -320,6 +320,30 @@ export async function fillSPSheet(
         for (let i = 0; i < extraTitleRows; i++) {
           copyRow(7 + offset, titleInsertPos + i);
         }
+
+        // 复制模板参考标题行的合并范围到新插入的行
+        const templateRowNum = 7 + offset;
+        const templateTitleMerges: { col1: string; col2: string }[] = [];
+        if (ws.model.merges) {
+          ws.model.merges.forEach((merge: any) => {
+            if (typeof merge === 'string') {
+              const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+              if (m) {
+                const r1 = parseInt(m[2]);
+                const r2 = parseInt(m[4]);
+                if (r1 === templateRowNum && r2 === templateRowNum) {
+                  templateTitleMerges.push({ col1: m[1], col2: m[3] });
+                }
+              }
+            }
+          });
+        }
+        for (let i = 0; i < extraTitleRows; i++) {
+          const newRow = titleInsertPos + i;
+          for (const { col1, col2 } of templateTitleMerges) {
+            try { ws.mergeCells(`${col1}${newRow}:${col2}${newRow}`); } catch { /* 忽略合并冲突 */ }
+          }
+        }
       }
     }
   }
@@ -546,6 +570,29 @@ export async function fillTable3(
       wsProduct.spliceRows(3, 0, ...Array(extraTitleRows).fill(undefined));
       for (let i = 0; i < extraTitleRows; i++) {
         copyTableRow(wsProduct, 2, 3 + i);
+      }
+
+      // 复制模板参考标题行(第2行)的合并范围到新插入的行
+      const templateTitleMergesT3: { col1: string; col2: string }[] = [];
+      if (wsProduct.model.merges) {
+        wsProduct.model.merges.forEach((merge: any) => {
+          if (typeof merge === 'string') {
+            const m = merge.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+            if (m) {
+              const r1 = parseInt(m[2]);
+              const r2 = parseInt(m[4]);
+              if (r1 === 2 && r2 === 2) {
+                templateTitleMergesT3.push({ col1: m[1], col2: m[3] });
+              }
+            }
+          }
+        });
+      }
+      for (let i = 0; i < extraTitleRows; i++) {
+        const newRow = 3 + i;
+        for (const { col1, col2 } of templateTitleMergesT3) {
+          try { wsProduct.mergeCells(`${col1}${newRow}:${col2}${newRow}`); } catch { /* 忽略 */ }
+        }
       }
     }
 

@@ -73,15 +73,16 @@ export default function Pair() {
     return types;
   }, [sortedImages]);
 
-  // 生成缩略图（当前组）
+  // 生成缩略图（当前组）— 用path作key避免不同组同名文件冲突
   useEffect(() => {
     if (sortedImages.length === 0) return;
     (async () => {
       const newThumbs: Record<string, string> = {};
       for (const img of sortedImages) {
-        if (!thumbnails[img.name]) {
+        const key = img.path || img.name;
+        if (!thumbnails[key]) {
           try {
-            newThumbs[img.name] = await createThumbnailUrl(img.file, 300);
+            newThumbs[key] = await createThumbnailUrl(img.file, 300);
           } catch {}
         }
       }
@@ -409,9 +410,9 @@ export default function Pair() {
                       className="relative mb-2 aspect-square cursor-zoom-in overflow-hidden bg-ink-100"
                       onClick={() => setPreviewIndex(i)}
                     >
-                      {thumbnails[img.name] ? (
+                      {thumbnails[img.path || img.name] ? (
                         <img
-                          src={thumbnails[img.name]}
+                          src={thumbnails[img.path || img.name]}
                           alt={img.name}
                           className="h-full w-full object-cover"
                         />
@@ -522,7 +523,7 @@ export default function Pair() {
                     </div>
                     <PairSlot
                       image={pair.squareImage}
-                      thumbnail={pair.squareImage ? thumbnails[pair.squareImage.name] : null}
+                      thumbnail={pair.squareImage ? thumbnails[pair.squareImage.path || pair.squareImage.name] : null}
                       onRemove={() => removeFromPair(i, 'square')}
                       onDragOver={(e) => handleSlotDragOver(e, i, 'square')}
                       onDragLeave={handleSlotDragLeave}
@@ -538,7 +539,7 @@ export default function Pair() {
                     </div>
                     <PairSlot
                       image={pair.mainImage}
-                      thumbnail={pair.mainImage ? thumbnails[pair.mainImage.name] : null}
+                      thumbnail={pair.mainImage ? thumbnails[pair.mainImage.path || pair.mainImage.name] : null}
                       onRemove={() => removeFromPair(i, 'main')}
                       onDragOver={(e) => handleSlotDragOver(e, i, 'main')}
                       onDragLeave={handleSlotDragLeave}
@@ -619,7 +620,7 @@ export default function Pair() {
       {previewIndex !== null && (
         <ImagePreview
           images={images.map((img) => ({
-            src: thumbnails[img.name] || '',
+            src: thumbnails[img.path || img.name] || '',
             name: img.name,
           }))}
           initialIndex={previewIndex}
