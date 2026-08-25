@@ -88,7 +88,8 @@ export default function Classify() {
         scanResult.folder1200,
         activeInfo.styleCode,
         activeInfo.productCode,
-        multiCodes
+        multiCodes,
+        listingMode === 'multiA'
       );
       setClassifiedImages(classified);
     }
@@ -252,16 +253,23 @@ export default function Classify() {
       }
     }
 
-    // 属性图保持SKU编码命名（按组对应的SKU编码）
+    // 属性图命名
     for (const img of images) {
       if (img.category === 'attribute') {
-        const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-        const gi = img.groupIndex ?? 0;
-        const groupCode = isMulti
-          ? (multiProductInfos[gi]?.productCode || activeInfo.productCode)
-          : activeInfo.productCode;
-        img.newName = `${groupCode}.${ext}`;
-        img.order = 0;
+        if (listingMode === 'multiA') {
+          // 同款不同数(multiA)：属性图保持原文件名，用户自行配对
+          img.newName = img.file.name;
+          img.order = 0;
+        } else {
+          // 其他模式：按组对应的SKU编码命名
+          const ext = img.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
+          const gi = img.groupIndex ?? 0;
+          const groupCode = isMulti
+            ? (multiProductInfos[gi]?.productCode || activeInfo.productCode)
+            : activeInfo.productCode;
+          img.newName = `${groupCode}.${ext}`;
+          img.order = 0;
+        }
       }
     }
   };
@@ -423,7 +431,8 @@ export default function Classify() {
                   scanResult.folder1200,
                   activeInfo.styleCode,
                   activeInfo.productCode,
-                  multiCodes
+                  multiCodes,
+                  listingMode === 'multiA'
                 );
                 setClassifiedImages(classified);
                 clearSelection();

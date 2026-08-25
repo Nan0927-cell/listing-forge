@@ -128,7 +128,8 @@ function classifySingleGroup(
   allCodes: string[],
   startOrder: number,
   groupIndex: number = 0,
-  groupFolderName?: string
+  groupFolderName?: string,
+  isMultiA?: boolean
 ): { result: ClassifiedImage[]; nextOrder: number; attrImages: ClassifiedImage[] } {
   const result: ClassifiedImage[] = [];
   let order = startOrder;
@@ -265,13 +266,24 @@ function classifySingleGroup(
   for (const item of categorized) {
     if (item.category !== 'attribute') continue;
     const ext = item.file.name.match(/\.([^.]+)$/)?.[1] || 'jpg';
-    attrImages.push({
-      file: item.file,
-      category: 'attribute',
-      newName: `${item.attrCode || productCode}.${ext}`,
-      order: 0,
-      groupIndex,
-    });
+    if (isMultiA) {
+      // 同款不同数(multiA)：属性图保持原文件名，用户自行配对
+      attrImages.push({
+        file: item.file,
+        category: 'attribute',
+        newName: item.file.name,
+        order: 0,
+        groupIndex,
+      });
+    } else {
+      attrImages.push({
+        file: item.file,
+        category: 'attribute',
+        newName: `${item.attrCode || productCode}.${ext}`,
+        order: 0,
+        groupIndex,
+      });
+    }
   }
 
   return { result, nextOrder: order, attrImages };
@@ -281,7 +293,8 @@ export function autoClassifyImages(
   files: ScannedFile[],
   styleCode: string,
   productCode: string,
-  multiProductCodes?: string[]
+  multiProductCodes?: string[],
+  isMultiA?: boolean
 ): ClassifiedImage[] {
   const allCodes = multiProductCodes && multiProductCodes.length > 0
     ? multiProductCodes
@@ -321,7 +334,7 @@ export function autoClassifyImages(
     const groupFiles = groups.get(groupName) || files;
     const groupCode = allCodes.includes(groupName) ? groupName : productCode;
     const { result, attrImages } = classifySingleGroup(
-      groupFiles, styleCode, groupCode, allCodes, 1, 0, groupName
+      groupFiles, styleCode, groupCode, allCodes, 1, 0, groupName, isMultiA
     );
     return [...result, ...attrImages];
   }
@@ -350,7 +363,7 @@ export function autoClassifyImages(
     const groupCode = allCodes.includes(groupName) ? groupName : (allCodes[groupIdx] || groupName);
 
     const { result: groupResult, nextOrder, attrImages } = classifySingleGroup(
-      groupFiles, styleCode, groupCode, allCodes, globalOrder, groupIdx, groupName
+      groupFiles, styleCode, groupCode, allCodes, globalOrder, groupIdx, groupName, isMultiA
     );
     result.push(...groupResult);
     allAttrImages.push(...attrImages);
