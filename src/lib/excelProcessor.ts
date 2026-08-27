@@ -266,17 +266,15 @@ export async function fillSPSheet(
       copyRow(4, targetStart + 2);
     }
 
-    // 多SKU: 为参考标题/关键词/参考链接插入额外行（仅内容不同的SKU才插入）
+    // 多SKU: 为参考标题/关键词/参考链接插入额外行（全局去重，内容相同的只写一行）
     if (numSkus > 1) {
-      // 计算哪些SKU的参考标题行与第一行不同，需要单独一行
-      const uniqueTitleSkus: number[] = [0]; // 第一个SKU总有一行
+      const uniqueTitleSkus: number[] = [0];
+      const seenContents = new Set([`${allInfos[0].competitorTitle || ''}||${allInfos[0].keywords || ''}||${allInfos[0].relatedLink || ''}`]);
       for (let i = 1; i < numSkus; i++) {
-        const sameAsFirst =
-          (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
-          (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
-          (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
-        if (!sameAsFirst) {
+        const content = `${allInfos[i].competitorTitle || ''}||${allInfos[i].keywords || ''}||${allInfos[i].relatedLink || ''}`;
+        if (!seenContents.has(content)) {
           uniqueTitleSkus.push(i);
+          seenContents.add(content);
         }
       }
 
@@ -423,16 +421,16 @@ export async function fillSPSheet(
   const useCode = isMulti && options?.mergedCode ? options.mergedCode : info.productCode;
   const firstInfo = allInfos[0];
 
-  // 参考标题/关键词/参考链接：仅为内容不同的SKU填写一行
-  // 先计算uniqueTitleSkus（内容不同的SKU索引列表）
+  // 参考标题/关键词/参考链接：全局去重，内容相同的只写一行
   const uniqueTitleSkus: number[] = isMulti ? (() => {
     const indices: number[] = [0];
+    const seenContents = new Set([`${allInfos[0].competitorTitle || ''}||${allInfos[0].keywords || ''}||${allInfos[0].relatedLink || ''}`]);
     for (let i = 1; i < numSkus; i++) {
-      const sameAsFirst =
-        (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
-        (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
-        (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
-      if (!sameAsFirst) indices.push(i);
+      const content = `${allInfos[i].competitorTitle || ''}||${allInfos[i].keywords || ''}||${allInfos[i].relatedLink || ''}`;
+      if (!seenContents.has(content)) {
+        indices.push(i);
+        seenContents.add(content);
+      }
     }
     return indices;
   })() : [0];
@@ -567,12 +565,13 @@ export async function fillTable3(
   // 多SKU: 为参考标题/关键词/参考链接插入额外行（仅内容不同的SKU才插入）
   if (isMulti) {
     const uniqueTitleSkus: number[] = [0];
+    const seenContents = new Set([`${allInfos[0].competitorTitle || ''}||${allInfos[0].keywords || ''}||${allInfos[0].relatedLink || ''}`]);
     for (let i = 1; i < numSkus; i++) {
-      const sameAsFirst =
-        (allInfos[i].competitorTitle || '') === (allInfos[0].competitorTitle || '') &&
-        (allInfos[i].keywords || '') === (allInfos[0].keywords || '') &&
-        (allInfos[i].relatedLink || '') === (allInfos[0].relatedLink || '');
-      if (!sameAsFirst) uniqueTitleSkus.push(i);
+      const content = `${allInfos[i].competitorTitle || ''}||${allInfos[i].keywords || ''}||${allInfos[i].relatedLink || ''}`;
+      if (!seenContents.has(content)) {
+        uniqueTitleSkus.push(i);
+        seenContents.add(content);
+      }
     }
     const extraTitleRows = uniqueTitleSkus.length - 1;
 
