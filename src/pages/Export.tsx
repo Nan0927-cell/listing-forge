@@ -155,10 +155,16 @@ export default function ExportPage() {
 
   // 获取OZON文件
   // 多SKU模式：按SKU子文件夹组织，放在"900 1200"文件夹内
+  // multiA(同款不同数): 直接返回扁平列表，不嵌套SKU子文件夹
   const getOzonFiles = (): ExportChild[] => {
     if (!scanResult) return [];
 
-    // 多SKU模式：按路径第一段(SKU子文件夹名)分组
+    // multiA模式或单SKU：直接返回扁平列表
+    if (listingMode === 'multiA' || !isMulti) {
+      return scanResult.ozonFiles.map(f => ({ name: f.name, blob: f.file }));
+    }
+
+    // 普通多SKU模式：按路径第一段(SKU子文件夹名)分组
     if (isMulti) {
       const ozonGroupMap = new Map<string, ScannedFile[]>();
       for (const f of scanResult.ozonFiles) {
