@@ -382,15 +382,20 @@ export async function fillSPSheet(
     ws.mergeCells(`I${startRow}:I${endRow}`);
     ws.mergeCells(`J${startRow}:J${endRow}`);
     ws.mergeCells(`K${startRow}:K${endRow}`);
+    ws.mergeCells(`O${startRow}:O${endRow}`);
+    ws.mergeCells(`P${startRow}:P${endRow}`);
+    ws.mergeCells(`Q${startRow}:Q${endRow}`);
+    ws.mergeCells(`R${startRow}:R${endRow}`);
   }
+
+  // D列在模板中没有合并，需要为每个SKU块（含第一个）创建纵向合并
+  ws.mergeCells(`D${startRow}:D${endRow}`);
 
     ws.getCell(`B${startRow}`).value = skuInfo.productCode;
     ws.getCell(`C${startRow}`).value = skuInfo.productName || '';
 
     const costValue = parseFloat(skuInfo.costPrice) || 0;
     ws.getCell(`D${startRow}`).value = costValue;
-    ws.getCell(`D${startRow + 1}`).value = costValue;
-    ws.getCell(`D${startRow + 2}`).value = costValue;
 
     if (!options?.skipPhysicalInfo) {
       ws.getCell(`E${startRow}`).value = parseFloat(skuInfo.weight) || '';
@@ -410,8 +415,8 @@ export async function fillSPSheet(
 
     const profitRate = (price: number) => price > 0 ? Math.round((1 - costValue / price) * 10000) / 10000 : 0;
     ws.getCell(`N${startRow}`).value = { formula: `1-(D${startRow}/M${startRow})`, result: profitRate(prices.tier3) };
-    ws.getCell(`N${startRow + 1}`).value = { formula: `1-(D${startRow + 1}/M${startRow + 1})`, result: profitRate(prices.tier2) };
-    ws.getCell(`N${startRow + 2}`).value = { formula: `1-(D${startRow + 2}/M${startRow + 2})`, result: profitRate(prices.tier1) };
+    ws.getCell(`N${startRow + 1}`).value = { formula: `1-(D${startRow}/M${startRow + 1})`, result: profitRate(prices.tier2) };
+    ws.getCell(`N${startRow + 2}`).value = { formula: `1-(D${startRow}/M${startRow + 2})`, result: profitRate(prices.tier1) };
   }
 
   // 共享内容（按偏移量填写）
